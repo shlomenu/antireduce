@@ -1,0 +1,8 @@
+(library
+ (public_name antireduce)
+ (name antireduce)
+ (libraries core core_kernel.pairing_heap domainslib)
+ (preprocess
+  (pps ppx_jane ppx_compare ppx_yojson_conv))
+ (flags
+  (:standard -w -30)))
