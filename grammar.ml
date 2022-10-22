@@ -6,93 +6,74 @@ open Util.Yojson_util
 type fast_unifier = type_context -> dc_type -> type_context * dc_type list
 
 type primitive_entry =
-  { name: string
-  ; ty: dc_type
-  ; log_prob: float
-  ; impl: program option
-  ; unifier: fast_unifier }
+  {name: string; ty: dc_type; impl: program option; unifier: fast_unifier}
 
 let yojson_of_primitive_entry ent =
   `Assoc
     [ ("name", yojson_of_string ent.name)
     ; ("ty", yojson_of_dc_type ent.ty)
-    ; ("log_prob", yojson_of_float ent.log_prob)
     ; ("impl", yojson_of_option yojson_of_program ent.impl) ]
 
 let primitive_entry_of_yojson = function
-  | `Assoc
-      [ ("name", j_name)
-      ; ("ty", j_ty)
-      ; ("log_prob", j_log_prob)
-      ; ("impl", j_impl) ] ->
-      let name = string_of_yojson j_name in
+  | `Assoc [("name", j_name); ("ty", j_ty); ("impl", j_impl)] ->
       let ty = dc_type_of_yojson j_ty in
-      let log_prob = float_of_yojson j_log_prob in
-      let impl = option_of_yojson program_of_yojson j_impl in
-      let unifier = make_fast_unifier ty in
-      {name; ty; log_prob; impl; unifier}
+      { name= string_of_yojson j_name
+      ; ty
+      ; impl= option_of_yojson program_of_yojson j_impl
+      ; unifier= make_fast_unifier ty }
   | _ ->
       failwith "primitive_entry_of_yojson: invalid JSON"
 
-type grammar =
-  { log_prob_any_type: float
-  ; library: primitive_entry list
-  ; state_type: dc_type option }
+type dsl = {library: primitive_entry list; state_type: dc_type option; size: int}
 [@@deriving yojson]
 
-let string_of_grammar gmr =
-  ( match gmr.state_type with
+let string_of_dsl dsl =
+  ( match dsl.state_type with
   | Some state_ty ->
       Printf.sprintf "state type : %s\n" (string_of_dc_type state_ty)
   | None ->
       "" )
-  ^ string_of_float gmr.log_prob_any_type
   ^ "\tt0\t$_\n"
   ^ String.concat ~sep:"\n"
-      (List.map gmr.library ~f:(fun ent ->
-           Float.to_string ent.log_prob
-           ^ "\t" ^ string_of_dc_type ent.ty ^ "\t" ^ ent.name ) )
+      (List.map dsl.library ~f:(fun ent ->
+           string_of_dc_type ent.ty ^ "\t" ^ ent.name ) )
 
-let grammar_of_primitives ?(state_type : dc_type option) primitives =
-  let n_primitives = List.length primitives in
-  let log_prob = -.log (float_of_int n_primitives) in
-  let f = function
-    | Primitive {name; ty} ->
-        let unifier = make_fast_unifier ty in
-        {name; ty; log_prob; impl= None; unifier}
-    | Invented (ty, b) ->
-        let unifier = make_fast_unifier ty in
-        {name= string_of_program b; ty; log_prob; impl= Some b; unifier}
-    | _ ->
-        failwith "grammar_of_primitives: not a base primitive"
+let dsl_of_primitives ?(state_type : dc_type option) primitives =
+  let library =
+    List.map primitives ~f:(function
+      | Primitive {name; ty} ->
+          let unifier = make_fast_unifier ty in
+          {name; ty; impl= None; unifier}
+      | Invented (ty, b) ->
+          let unifier = make_fast_unifier ty in
+          {name= string_of_program b; ty; impl= Some b; unifier}
+      | _ ->
+          failwith "dsl_of_primitives: not a base primitive" )
   in
-  let library = List.map primitives ~f in
-  {log_prob_any_type= log 0.5; library; state_type}
+  let size = List.length library in
+  {library; state_type; size}
 
 exception DuplicatePrimitive
 
-let deduplicated_grammar_of_primitives ?(state_type = None) primitives =
+let dedup_dsl_of_primitives ?(state_type = None) primitives =
   let n_unique_prims =
     List.length @@ List.dedup_and_sort ~compare:compare_program primitives
   in
   if List.length primitives = n_unique_prims then
-    let log_prob = -.log (float_of_int n_unique_prims) in
-    let f = function
-      | Primitive {name; ty} ->
-          {name; ty; log_prob; impl= None; unifier= make_fast_unifier ty}
-      | Invented (ty, b) ->
-          { name= string_of_program b
-          ; ty
-          ; log_prob
-          ; impl= Some b
-          ; unifier= make_fast_unifier ty }
-      | _ ->
-          failwith
-            "deduplicated_grammar_of_primitives: not a base or invented \
-             primitive"
-    in
-    let library = List.map primitives ~f in
-    {log_prob_any_type= log 0.5; library; state_type}
+    { library=
+        List.map primitives ~f:(function
+          | Primitive {name; ty} ->
+              {name; ty; impl= None; unifier= make_fast_unifier ty}
+          | Invented (ty, b) ->
+              { name= string_of_program b
+              ; ty
+              ; impl= Some b
+              ; unifier= make_fast_unifier ty }
+          | _ ->
+              failwith
+                "dedup_dsl_of_primitives: not a base or invented primitive" )
+    ; state_type
+    ; size= n_unique_prims }
   else raise DuplicatePrimitive
 
 let primitive_of_entry ent =
@@ -102,104 +83,74 @@ let primitive_of_entry ent =
   | Some b ->
       Invented (ent.ty, b)
 
-let primitives_of_grammar gmr = List.map gmr.library ~f:primitive_of_entry
+let primitives_of_dsl dsl = List.map dsl.library ~f:primitive_of_entry
 
-let log_prob_under_grammar gmr p =
-  if is_index p then gmr.log_prob_any_type
+let prob_under_dsl ?(prob_of_index : float = 0.5) dsl p =
+  if is_index p then prob_of_index
   else
-    let f ent =
-      let p' = primitive_of_entry ent in
-      if equal_program p' p then Some ent.log_prob else None
-    in
-    match List.filter_map gmr.library ~f with
-    | [l] ->
-        l
-    | _ :: _ ->
-        raise DuplicatePrimitive
-    | [] ->
-        let msg =
-          "log_prob_under_grammar: missing primitive " ^ string_of_program p
-        in
-        failwith msg
+    match
+      List.find dsl.library ~f:(fun ent ->
+          equal_program p (primitive_of_entry ent) )
+    with
+    | Some _ ->
+        1. /. float_of_int dsl.size
+    | None ->
+        failwith ("prob_under_dsl: missing_primitive " ^ string_of_program p)
+
+let log_prob_under_dsl dsl = Fn.compose log (prob_under_dsl dsl)
 
 type unifying_expression =
-  { expr: program
-  ; parameters: dc_type list
-  ; context: type_context
-  ; log_prob: float }
+  {expr: program; parameters: dc_type list; context: type_context}
 
-let unifying_expressions gmr env req cxt =
-  let unifying_variables =
-    let f i ty =
+let unifying_indices dsl env req cxt =
+  List.filter_mapi env ~f:(fun i ty ->
       let expr = Index i in
       let context, ty = apply_context cxt ty in
-      let log_prob = gmr.log_prob_any_type in
       let terminal_ty = terminal_of_type ty in
       if might_unify terminal_ty req then
         try
           let context = unify context terminal_ty req in
           let context, ty = apply_context context ty in
           let parameters = parameters_of_type ty in
-          Some {expr; parameters; context; log_prob}
+          Some {expr; parameters; context}
         with UnificationFailure -> None
-      else None
-    in
-    let unified = List.filter_mapi env ~f in
-    let old_states_removed =
-      match gmr.state_type with
-      | Some state_ty when equal_dc_type state_ty req ->
-          let terminal_indices =
-            let f ent =
-              if List.is_empty ent.parameters then Some (int_of_index ent.expr)
-              else None
-            in
-            List.filter_map unified ~f
+      else None )
+  |>
+  match dsl.state_type with
+  | Some state_ty when equal_dc_type state_ty req ->
+      fun unified ->
+        let terminal_indices =
+          let f ent =
+            if List.is_empty ent.parameters then Some (int_of_index ent.expr)
+            else None
           in
-          if List.is_empty terminal_indices then unified
-          else
-            let min_terminal_index = Util.fold1 min terminal_indices in
-            let f ent =
-              not
-                ( is_index ent.expr
-                && List.is_empty ent.parameters
-                && int_of_index ent.expr <> min_terminal_index )
-            in
-            List.filter unified ~f
-      | _ ->
-          unified
-    in
-    let normalization_factor =
-      log @@ Float.of_int @@ List.length old_states_removed
-    in
-    let f ent =
-      let log_prob = ent.log_prob -. normalization_factor in
-      {ent with log_prob}
-    in
-    List.map old_states_removed ~f
-  in
-  let unifying_programs =
-    let f ent =
+          List.filter_map unified ~f
+        in
+        if List.is_empty terminal_indices then unified
+        else
+          let min_terminal_index = Util.fold1 min terminal_indices in
+          let f ent =
+            not
+              ( is_index ent.expr
+              && List.is_empty ent.parameters
+              && int_of_index ent.expr <> min_terminal_index )
+          in
+          List.filter unified ~f
+  | _ ->
+      Fn.id
+
+let unifying_primitives dsl req cxt =
+  List.filter_map dsl.library ~f:(fun ent ->
       try
         let terminal_ty = terminal_of_type ent.ty in
         if might_unify terminal_ty req then
           let context, parameters = ent.unifier cxt req in
-          let expr = primitive_of_entry ent in
-          let log_prob = ent.log_prob in
-          Some {expr; parameters; context; log_prob}
+          Some {expr= primitive_of_entry ent; parameters; context}
         else None
-      with UnificationFailure -> None
-    in
-    List.filter_map gmr.library ~f
-  in
-  let unified = unifying_variables @ unifying_programs in
-  let normalization_factor =
-    List.map unified ~f:(fun ent -> ent.log_prob) |> Util.lse_list
-  in
-  let f ent =
-    let log_prob = ent.log_prob -. normalization_factor in
-    {ent with log_prob}
-  in
-  List.map unified ~f
+      with UnificationFailure -> None )
+
+let unifying_expressions dsl env req cxt =
+  unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt
 
 type 'a likelihood_factorization =
   { normalizers: ('a list, float) Hashtbl.t
@@ -307,17 +258,18 @@ let record_factor fact used possible =
     | None ->
         1. )
 
-let likelihood_of_factorization gmr fact =
-  let log_prob_of = log_prob_under_grammar gmr in
+let likelihood_of_factorization dsl fact =
+  let log_prob_of = log_prob_under_dsl dsl in
   fact.constant
   +. Hashtbl.fold fact.uses ~init:0. ~f:(fun ~key ~data log_prob ->
-         let use_prob = log_prob_of key in
-         log_prob +. (data *. use_prob) )
+         log_prob +. (data *. log_prob_of key) )
   -. Hashtbl.fold fact.normalizers ~init:0. ~f:(fun ~key ~data log_prob ->
-         let normalizer_prob = Util.lse_list @@ List.map key ~f:log_prob_of in
-         log_prob +. (data *. normalizer_prob) )
+         let log_sum =
+           List.fold key ~init:0. ~f:(fun tot p -> tot +. log_prob_of p)
+         in
+         log_prob +. (data *. log log_sum) )
 
-let factorize gmr req p =
+let factorize dsl req p =
   let rec walk_application_tree = function
     | Apply (f, x) ->
         walk_application_tree f @ [x]
@@ -333,26 +285,21 @@ let factorize gmr req p =
         let p' = strip_n_abstractions 1 p' in
         go right env p'
     | _ -> (
-        let exprs = unifying_expressions gmr env ty !cxt_ref in
+        let exprs = unifying_expressions dsl env ty !cxt_ref in
         match walk_application_tree p' with
         | [] ->
             failwith "walk_application_tree"
         | f :: xs -> (
-            let used =
-              let f {expr; _} = equal_program expr f in
-              List.find exprs ~f
-            in
-            match used with
-            | None ->
-                fact.constant <- Float.neg_infinity
-            | Some expr ->
-                cxt_ref := expr.context ;
-                record_factor fact f
-                @@ List.map exprs ~f:(fun {expr; _} -> expr) ;
-                List.iter (List.zip_exn xs expr.parameters) ~f:(fun (x, x_ty) ->
-                    go x_ty env x ) ) )
+          match List.find exprs ~f:(fun {expr; _} -> equal_program expr f) with
+          | None ->
+              fact.constant <- Float.neg_infinity
+          | Some expr ->
+              cxt_ref := expr.context ;
+              record_factor fact f @@ List.map exprs ~f:(fun {expr; _} -> expr) ;
+              List.iter (List.zip_exn xs expr.parameters) ~f:(fun (x, x_ty) ->
+                  go x_ty env x ) ) )
   in
   go req [] p ; fact
 
-let likelihood_under_grammar gmr req p =
-  likelihood_of_factorization gmr @@ factorize gmr req p
+let likelihood_under_dsl dsl req p =
+  likelihood_of_factorization dsl @@ factorize dsl req p
