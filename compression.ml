@@ -1,7 +1,7 @@
 open Core
 open Type
 open Program
-open Grammar
+open Dsl
 open Versions
 module T = Domainslib.Task
 module C = Domainslib.Chan
@@ -10,14 +10,14 @@ let verbose_compression = ref false
 
 let collect_data = ref false
 
-let grammar_induction_score ~primitive_size_penalty ~grammar_size_penalty
-    request transforms gmr =
+let dsl_induction_score ~primitive_size_penalty ~dsl_size_penalty request
+    transforms dsl =
   let log_prob =
-    let n_transforms = Float.of_int @@ List.length transforms in
-    let factorizations = List.map transforms ~f:(factorize gmr request) in
+    let base_factor = log (1. /. (Float.of_int @@ List.length transforms)) in
     Util.fold1 ( +. )
-    @@ List.map factorizations ~f:(fun fact ->
-           log (1. /. n_transforms) +. likelihood_of_factorization gmr fact )
+    @@ List.map ~f:(fun fact ->
+           base_factor +. likelihood_of_factorization dsl fact )
+    @@ List.map transforms ~f:(factorize dsl request)
   in
   let production_size = function
     | Primitive _ ->
@@ -25,14 +25,13 @@ let grammar_induction_score ~primitive_size_penalty ~grammar_size_penalty
     | Invented (_, b) ->
         size_of_program @@ strip_abstractions b
     | _ ->
-        failwith
-          "grammar contains entry which is not base or invented primitive"
+        failwith "dsl contains entry which is not base or invented primitive"
   in
   log_prob
-  -. (primitive_size_penalty *. (Float.of_int @@ List.length gmr.library))
-  -. grammar_size_penalty
+  -. (primitive_size_penalty *. (Float.of_int @@ List.length dsl.library))
+  -. dsl_size_penalty
      *. ( Float.of_int @@ List.reduce_exn ~f:( + )
-        @@ List.map gmr.library ~f:(fun ent ->
+        @@ List.map dsl.library ~f:(fun ent ->
                production_size @@ primitive_of_entry ent ) )
 
 exception EtaExpandFailure
@@ -168,11 +167,10 @@ let nontrivial e =
   go 0 e ;
   !primitives > 1 || (!primitives = 1 && !duplicated_indices > 0)
 
-let compression_step ~inlining ~grammar_size_penalty ~primitive_size_penalty
-    ?(n_beta_inversions = 3) ~beam_size ~top_i request gmr transforms =
+let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
+    ?(n_beta_inversions = 3) ~beam_size ~top_i request dsl transforms =
   let score =
-    grammar_induction_score ~primitive_size_penalty ~grammar_size_penalty
-      request
+    dsl_induction_score ~primitive_size_penalty ~dsl_size_penalty request
   in
   let tbl = new_version_tbl () in
   let cost_tbl = empty_cost_tbl tbl in
@@ -213,9 +211,9 @@ let compression_step ~inlining ~grammar_size_penalty ~primitive_size_penalty
       Format.eprintf "List.length ranked_refactorings: %d\n"
       @@ List.length ranked_refactorings ;
       Util.flush_all () ;
-      let initial_score = score transforms gmr in
+      let initial_score = score transforms dsl in
       Format.eprintf "Initial score: %f\n" initial_score ;
-      let[@warning "-27"] best_score, gmr', transforms', best_i =
+      let[@warning "-27"] best_score, dsl', transforms', best_i =
         Util.time_it (Printf.sprintf "Evaluated top-%d refactorings" top_i)
           (fun () ->
             Util.minimum_by ~compare:Float.compare ~f:(fun (s, _, _, _) -> -.s)
@@ -225,15 +223,14 @@ let compression_step ~inlining ~grammar_size_penalty ~primitive_size_penalty
                    in
                    Format.eprintf "normalized_invention: %s"
                    @@ string_of_program new_primitive ;
-                   let score, gmr', transforms' =
+                   let score, dsl', transforms' =
                      try
                        Gc.compact () ;
-                       let primitives = primitives_of_grammar gmr in
+                       let primitives = primitives_of_dsl dsl in
                        if List.mem ~equal:equal_program primitives new_primitive
                        then raise DuplicatePrimitive ;
-                       let gmr' =
-                         deduplicated_grammar_of_primitives
-                           (new_primitive :: primitives)
+                       let dsl' =
+                         dedup_dsl_of_primitives (new_primitive :: primitives)
                        in
                        let rewriter = rewrite_with_invention new_primitive in
                        let new_cost_tbl = empty_cheap_cost_tbl tbl in
@@ -260,9 +257,9 @@ let compression_step ~inlining ~grammar_size_penalty ~primitive_size_penalty
                                     try rewriter request p'
                                     with EtaExpandFailure -> p ) )
                        in
-                       (score transforms' gmr', gmr', transforms')
+                       (score transforms' dsl', dsl', transforms')
                      with UnificationFailure | DuplicatePrimitive ->
-                       (Float.neg_infinity, gmr, transforms)
+                       (Float.neg_infinity, dsl, transforms)
                    in
                    if !verbose_compression then (
                      Printf.eprintf
@@ -273,9 +270,9 @@ let compression_step ~inlining ~grammar_size_penalty ~primitive_size_penalty
                        (string_of_dc_type @@ closed_inference new_primitive)
                        cost score ;
                      Util.flush_all () ) ;
-                   (score, gmr', transforms', i) ) )
+                   (score, dsl', transforms', i) ) )
       in
-      let new_primitive = List.hd_exn @@ primitives_of_grammar gmr' in
+      let new_primitive = List.hd_exn @@ primitives_of_dsl dsl' in
       Printf.eprintf
         "Improved score to %f (d_score=%f) w/ new primitive\n\t%s : %s\n"
         best_score
@@ -283,20 +280,20 @@ let compression_step ~inlining ~grammar_size_penalty ~primitive_size_penalty
         (string_of_program new_primitive)
         (string_of_dc_type @@ canonical_type @@ closed_inference new_primitive) ;
       Util.flush_all () ;
-      Some (gmr', transforms')
+      Some (dsl', transforms')
 
-let export_compression_checkpoint ~n_cores ~grammar_size_penalty
-    ~primitive_size_penalty ?(n_beta_inversions = 3) ~beam_size ~top_i gmr
+let export_compression_checkpoint ~n_cores ~dsl_size_penalty
+    ~primitive_size_penalty ?(n_beta_inversions = 3) ~beam_size ~top_i dsl
     transforms =
   let ts = Time.to_filename_string ~zone:Time.Zone.utc @@ Time.now () in
   let filename = Printf.sprintf "compression_messages/%s" ts in
   let j : Yojson.Safe.t =
     `Assoc
-      [ ("DSL", yojson_of_grammar gmr)
+      [ ("dsl", yojson_of_dsl dsl)
       ; ("top_i", `Int top_i)
       ; ("beam_size", `Int beam_size)
       ; ("n_beta_inversions", `Int n_beta_inversions)
-      ; ("grammar_size_penalty", `Float grammar_size_penalty)
+      ; ("dsl_size_penalty", `Float dsl_size_penalty)
       ; ("verbose", `Bool true)
       ; ("CPUs", `Int n_cores)
       ; ("primitive_size_penalty", `Float primitive_size_penalty)
@@ -307,14 +304,16 @@ let export_compression_checkpoint ~n_cores ~grammar_size_penalty
   Yojson.Safe.to_file filename j ;
   Printf.eprintf "Exported compression checkpoint to %s\n" filename
 
-let compress ?(n_cores = 1) ~grammar_size_penalty ~inlining
-    ~primitive_size_penalty ?(n_beta_inversions = 3) ~beam_size ~top_i
-    ~iterations request gmr transforms =
-  let find_new_primitive gmr gmr' =
-    let primitives = primitives_of_grammar gmr in
-    let primitives' = primitives_of_grammar gmr' in
-    let f = Fn.compose not (List.mem ~equal:equal_program primitives) in
-    Util.singleton_list @@ List.filter primitives' ~f
+let compress ?(n_cores = 1) ~dsl_size_penalty ~inlining ~primitive_size_penalty
+    ?(n_beta_inversions = 3) ~beam_size ~top_i ~iterations request dsl
+    transforms =
+  let find_new_primitive dsl dsl' =
+    Util.singleton_list
+    @@ List.filter
+         ~f:
+           (Fn.compose not
+              (List.mem ~equal:equal_program (primitives_of_dsl dsl)) )
+    @@ primitives_of_dsl dsl'
   in
   let illustrate_new_primitive prim transforms =
     let illustrations =
@@ -330,27 +329,26 @@ let compress ?(n_cores = 1) ~grammar_size_penalty ~inlining
     List.iter illustrations ~f:(fun p ->
         Printf.eprintf "  %s\n" (string_of_program p) )
   in
-  let rec go ~iterations gmr frontiers =
+  let rec go ~iterations dsl frontiers =
     if iterations < 1 then (
       Printf.eprintf "Exiting ocaml compression because of iteration bound.\n" ;
-      (gmr, frontiers) )
+      (dsl, frontiers) )
     else
       match
         Util.time_it "Completed one step of memory consolidation" (fun () ->
-            compression_step ~inlining ~grammar_size_penalty
-              ~primitive_size_penalty ~n_beta_inversions ~beam_size ~top_i
-              request gmr transforms )
+            compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
+              ~n_beta_inversions ~beam_size ~top_i request dsl transforms )
       with
       | None ->
-          (gmr, frontiers)
-      | Some (gmr', frontiers') ->
-          illustrate_new_primitive (find_new_primitive gmr gmr') frontiers' ;
+          (dsl, frontiers)
+      | Some (dsl', frontiers') ->
+          illustrate_new_primitive (find_new_primitive dsl dsl') frontiers' ;
           if !verbose_compression && iterations > 1 then
-            export_compression_checkpoint ~n_cores ~grammar_size_penalty
-              ~primitive_size_penalty ~n_beta_inversions ~beam_size ~top_i gmr'
+            export_compression_checkpoint ~n_cores ~dsl_size_penalty
+              ~primitive_size_penalty ~n_beta_inversions ~beam_size ~top_i dsl'
               frontiers' ;
           Util.flush_all () ;
-          go ~iterations:(iterations - 1) gmr' frontiers'
+          go ~iterations:(iterations - 1) dsl' frontiers'
   in
   Util.time_it "completed ocaml compression" (fun () ->
-      go ~iterations gmr transforms )
+      go ~iterations dsl transforms )

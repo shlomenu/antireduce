@@ -1,15 +1,15 @@
 open Core
 open Type
 open Program
-open Grammar
+open Dsl
 module S = Yojson.Safe
 module SU = Yojson.Safe.Util
 
 let request_file = "request.json"
 
-let grammars_dir = "libraries"
+let dsl_dir = "dsls"
 
-let transforms_dir = "transforms"
+let transforms_dir = "discrete_representations"
 
 type transform = {name: string; program: program}
 
@@ -33,11 +33,11 @@ let load_request_from = Fn.compose dc_type_of_yojson S.from_file
 
 let load_request () = load_request_from request_file
 
-let load_grammar_from dir j =
-  grammar_of_yojson @@ S.from_file @@ Filename.concat dir @@ SU.to_string
-  @@ SU.member "gmr_file" j
+let load_dsl_from dir j =
+  dsl_of_yojson @@ S.from_file @@ Filename.concat dir @@ SU.to_string
+  @@ SU.member "dsl_file" j
 
-let load_grammar = load_grammar_from grammars_dir
+let load_dsl = load_dsl_from dsl_dir
 
 let load_transforms_from domain parse dir =
   Sys.readdir dir
@@ -49,11 +49,11 @@ let load_transforms_from domain parse dir =
          else None )
   |> Array.to_list |> Util.unzip3
 
-let log_grammar_to dir new_gmr_file new_gmr =
-  let new_gmr_fn = Filename.concat dir new_gmr_file in
-  S.to_file new_gmr_fn @@ yojson_of_grammar new_gmr
+let log_dsl_to dir new_dsl_file new_dsl =
+  let new_dsl_fn = Filename.concat dir new_dsl_file in
+  S.to_file new_dsl_fn @@ yojson_of_dsl new_dsl
 
-let log_grammar = log_grammar_to grammars_dir
+let log_dsl = log_dsl_to dsl_dir
 
 let overwrite_transforms programs' paths transforms =
   let transforms' =
@@ -69,9 +69,9 @@ let overwrite_transforms programs' paths transforms =
 let commands_to_transform ~(default_program : program)
     ~(default_output : unit -> 'b) ~(evaluate : program -> 'a option)
     ~(postprocess_output : 'a -> 'b) ~(yojson_of_output : 'b -> S.t)
-    ~(transform_type : dc_type) ~(domain : string) ~gmr cmds =
+    ~(transform_type : dc_type) ~(domain : string) ~dsl cmds =
   let typechecked, timed_out, p, n_unused, output =
-    match Commands.commands_to_program transform_type gmr cmds with
+    match Commands.commands_to_program transform_type dsl cmds with
     | Some (p, n_unused) ->
         Format.eprintf "%s\n" (string_of_program @@ beta_normal_form p) ;
         Out_channel.flush stderr ;
@@ -95,15 +95,11 @@ let commands_to_transform ~(default_program : program)
     ; ("original", `String (string_of_program p))
     ; ("output", yojson_of_output output) ]
 
-let execute_and_save ~(timeout : float) ~(attempts : int) ~gmr
-    ~initial_primitives ~default_program ~default_output ~evaluate
-    ~postprocess_output ~yojson_of_output ~transform_type ~domain j =
-  SU.member "commands" j |> SU.to_list
-  |> List.map ~f:(fun j' ->
-         try Hashtbl.find_exn initial_primitives @@ SU.to_string j'
-         with SU.Type_error _ ->
-           Util.value_exn (primitive_entry_of_yojson j').impl )
+let execute_and_save ~(timeout : float) ~(attempts : int) ~dsl ~default_program
+    ~default_output ~evaluate ~postprocess_output ~yojson_of_output
+    ~transform_type ~domain j =
+  SU.member "commands" j |> SU.to_list |> List.map ~f:SU.to_number
   |> commands_to_transform ~default_program ~default_output
        ~evaluate:(evaluate ~timeout ~attempts)
-       ~postprocess_output ~yojson_of_output ~transform_type ~domain ~gmr
+       ~postprocess_output ~yojson_of_output ~transform_type ~domain ~dsl
   |> S.to_channel Out_channel.stdout

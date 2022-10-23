@@ -535,8 +535,8 @@ let rec log_version_size tbl i =
       log_version_size tbl f +. log_version_size tbl x
   | AbstractionSpace b ->
       log_version_size tbl b
-  | Union u ->
-      Util.lse_list @@ List.map u ~f:(log_version_size tbl)
+  | Union us ->
+      log (List.reduce_exn ~f:( +. ) @@ List.map us ~f:(log_version_size tbl))
   | _ ->
       0.
 

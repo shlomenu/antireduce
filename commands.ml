@@ -1,7 +1,7 @@
 open Core
 open Type
 open Program
-open Grammar
+open Dsl
 
 type partial_program =
   | PIndex of int
@@ -55,47 +55,56 @@ let string_of_partial_program (p : partial_program) : string =
   in
   go true p
 
-let rec enumerate_argument gmr cxt req env prims =
+let select_at_point (ues : unifying_expression list) (point : float) :
+    unifying_expression list * unifying_expression =
+  let n_exprs = List.length ues in
+  let location =
+    min (n_exprs - 1)
+    @@ int_of_float
+    @@ Float.round_nearest (point *. (float_of_int @@ n_exprs))
+  in
+  (List.filteri ues ~f:(fun i _ -> i <> location), List.nth_exn ues location)
+
+let rec enumerate_argument dsl cxt req env search_points =
   match req with
   | Arrow {left; right; _} ->
-      Option.value_map ~default:None ~f:(fun (b, cxt', log_prob, prims') ->
-          Some (PAbstraction b, cxt', log_prob, prims') )
-      @@ enumerate_argument gmr cxt right (left :: env) prims
+      Option.value_map ~default:None ~f:(fun (b, cxt', prims') ->
+          Some (PAbstraction b, cxt', prims') )
+      @@ enumerate_argument dsl cxt right (left :: env) search_points
   | _ -> (
-    match prims with
-    | prim :: rest -> (
-      match
-        unifying_expressions gmr env req cxt
-        |> List.filter_map ~f:(fun ue ->
-               if equal_program prim ue.expr then Some ue else None )
-      with
-      | e_f :: _ ->
-          Option.value_map ~default:None
-            ~f:(fun (f_applied, cxt', log_prob_args, prims') ->
-              Some (f_applied, cxt', log_prob_args +. e_f.log_prob, prims') )
-          @@ enumerate_application gmr cxt env e_f.parameters
-               (partial_of_program e_f.expr)
-               rest
-      | _ ->
-          None )
+    match search_points with
+    | point :: rest ->
+        let rec go remaining_unified =
+          let unselected, selected = select_at_point remaining_unified point in
+          match
+            enumerate_application dsl cxt env selected.parameters
+              (partial_of_program selected.expr)
+              rest
+          with
+          | Some _ as r ->
+              r
+          | None ->
+              if List.is_empty unselected then None else go unselected
+        in
+        go @@ unifying_primitives dsl req cxt
     | _ ->
         None )
 
-and enumerate_application gmr cxt env parameters f prims =
+and enumerate_application dsl cxt env parameters f search_points =
   match parameters with
   | [] ->
-      Some (f, cxt, 0.0, prims)
-  | x_1 :: rest ->
-      let cxt, x_1 = apply_context cxt x_1 in
-      Option.value_map ~default:None
-        ~f:(fun (x_1, cxt', log_prob_x_1, prims') ->
-          Option.value_map ~default:None
-            ~f:(fun (xs, cxt'', log_prob_rest, prims'') ->
-              Some (xs, cxt'', log_prob_x_1 +. log_prob_rest, prims'') )
-          @@ enumerate_application gmr cxt' env rest (PApply (f, x_1)) prims' )
-      @@ enumerate_argument gmr cxt x_1 env prims
+      Some (f, cxt, search_points)
+  | x_1_ty :: rest ->
+      if List.length parameters > List.length search_points then None
+      else
+        let cxt, x_1_ty = apply_context cxt x_1_ty in
+        enumerate_argument dsl cxt x_1_ty env search_points
+        |> Option.value_map ~default:None ~f:(fun (x_1, cxt', search_points') ->
+               enumerate_application dsl cxt' env rest
+                 (PApply (f, x_1))
+                 search_points' )
 
-let commands_to_program req gmr prim_indices =
-  enumerate_argument gmr empty_type_context req [] prim_indices
-  |> Option.value_map ~default:None ~f:(fun (p, _, _, prim_indices') ->
+let commands_to_program req gmr search_points =
+  enumerate_argument gmr empty_type_context req [] search_points
+  |> Option.value_map ~default:None ~f:(fun (p, _, prim_indices') ->
          Some (program_of_partial p, List.length prim_indices') )

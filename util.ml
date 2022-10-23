@@ -22,17 +22,6 @@ let is_valid x = (not (Float.is_nan x)) && Float.is_finite x
 
 let is_invalid = Fn.compose not is_valid
 
-let lse x y =
-  if is_invalid x then y
-  else if is_invalid y then x
-  else if Float.(x > y) then x +. log (1.0 +. exp (y -. x))
-  else y +. log (1.0 +. exp (x -. y))
-
-let softMax = lse
-
-let lse_list (l : float list) : float =
-  List.fold_left l ~f:lse ~init:Float.neg_infinity
-
 let range = List.range 0
 
 let flush_all () = Out_channel.flush stdout ; Out_channel.flush stderr

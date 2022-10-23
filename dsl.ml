@@ -220,21 +220,19 @@ let empty_factorization () =
 
 let mix_factorizations weighted_factorizations =
   let mixed = empty_factorization () in
-  let f (w, fact') =
-    Hashtbl.iteri fact'.uses ~f:(fun ~key ~data ->
-        Hashtbl.update mixed.uses key ~f:(function
-          | Some k ->
-              k +. (w *. data)
-          | None ->
-              w *. data ) ) ;
-    Hashtbl.iteri fact'.normalizers ~f:(fun ~key ~data ->
-        Hashtbl.update mixed.normalizers key ~f:(function
-          | Some k ->
-              k +. (w *. data)
-          | None ->
-              w *. data ) )
-  in
-  List.iter weighted_factorizations ~f ;
+  List.iter weighted_factorizations ~f:(fun (w, fact') ->
+      Hashtbl.iteri fact'.uses ~f:(fun ~key ~data ->
+          Hashtbl.update mixed.uses key ~f:(function
+            | Some k ->
+                k +. (w *. data)
+            | None ->
+                w *. data ) ) ;
+      Hashtbl.iteri fact'.normalizers ~f:(fun ~key ~data ->
+          Hashtbl.update mixed.normalizers key ~f:(function
+            | Some k ->
+                k +. (w *. data)
+            | None ->
+                w *. data ) ) ) ;
   mixed
 
 let record_factor fact used possible =
@@ -265,7 +263,7 @@ let likelihood_of_factorization dsl fact =
          log_prob +. (data *. log_prob_of key) )
   -. Hashtbl.fold fact.normalizers ~init:0. ~f:(fun ~key ~data log_prob ->
          let log_sum =
-           List.fold key ~init:0. ~f:(fun tot p -> tot +. log_prob_of p)
+           List.reduce_exn ~f:( +. ) @@ List.map key ~f:log_prob_of
          in
          log_prob +. (data *. log log_sum) )
 
