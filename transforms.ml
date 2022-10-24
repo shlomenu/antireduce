@@ -69,8 +69,8 @@ let overwrite_transforms programs' paths transforms =
 let commands_to_transform ~(default_program : program)
     ~(default_output : unit -> 'b) ~(evaluate : program -> 'a option)
     ~(postprocess_output : 'a -> 'b) ~(yojson_of_output : 'b -> S.t)
-    ~(transform_type : dc_type) ~(domain : string) ~dsl cmds =
-  let typechecked, timed_out, p, n_unused, output =
+    ~(transform_type : dc_type) ~dsl cmds =
+  let translated, timed_out, p, n_unused, output =
     match Commands.commands_to_program transform_type dsl cmds with
     | Some (p, n_unused) ->
         Format.eprintf "%s\n" (string_of_program @@ beta_normal_form p) ;
@@ -87,9 +87,8 @@ let commands_to_transform ~(default_program : program)
         (false, false, default_program, List.length cmds, default_output ())
   in
   `Assoc
-    [ ("domain", `String domain)
-    ; ("n_unused", `Int n_unused)
-    ; ("typechecked", `Bool typechecked)
+    [ ("n_unused", `Int n_unused)
+    ; ("translated", `Bool translated)
     ; ("timed_out", `Bool timed_out)
     ; ("beta_reduced", `String (string_of_program @@ beta_normal_form p))
     ; ("original", `String (string_of_program p))
@@ -97,9 +96,9 @@ let commands_to_transform ~(default_program : program)
 
 let execute_and_save ~(timeout : float) ~(attempts : int) ~dsl ~default_program
     ~default_output ~evaluate ~postprocess_output ~yojson_of_output
-    ~transform_type ~domain j =
+    ~transform_type j =
   SU.member "commands" j |> SU.to_list |> List.map ~f:SU.to_number
   |> commands_to_transform ~default_program ~default_output
        ~evaluate:(evaluate ~timeout ~attempts)
-       ~postprocess_output ~yojson_of_output ~transform_type ~domain ~dsl
+       ~postprocess_output ~yojson_of_output ~transform_type ~dsl
   |> S.to_channel Out_channel.stdout
