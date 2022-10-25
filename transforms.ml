@@ -97,7 +97,7 @@ let commands_to_transform ~(default_program : program)
 let execute_and_save ~(timeout : float) ~(attempts : int) ~dsl ~default_program
     ~default_output ~evaluate ~postprocess_output ~yojson_of_output
     ~transform_type j =
-  SU.member "commands" j |> SU.to_list |> List.map ~f:SU.to_number
+  SU.member "commands" j |> SU.to_list |> List.map ~f:SU.to_int
   |> commands_to_transform ~default_program ~default_output
        ~evaluate:(evaluate ~timeout ~attempts)
        ~postprocess_output ~yojson_of_output ~transform_type ~dsl

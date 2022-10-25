@@ -55,15 +55,6 @@ let string_of_partial_program (p : partial_program) : string =
   in
   go true p
 
-let select_at_point ues (point : float) =
-  let n_exprs = List.length ues in
-  let location =
-    min (n_exprs - 1)
-    @@ int_of_float
-    @@ Float.round_nearest (point *. (float_of_int @@ n_exprs))
-  in
-  (List.filteri ues ~f:(fun i _ -> i <> location), List.nth_exn ues location)
-
 let rec enumerate_terminal dsl cxt req search_points =
   match req with
   | Arrow {right; _} ->
@@ -74,7 +65,11 @@ let rec enumerate_terminal dsl cxt req search_points =
     match search_points with
     | point :: rest ->
         let rec go remaining_unified =
-          let unselected, selected = select_at_point remaining_unified point in
+          let location = min (List.length remaining_unified - 1) point in
+          let selected = List.nth_exn remaining_unified location in
+          let unselected =
+            List.filteri remaining_unified ~f:(fun i _ -> i <> location)
+          in
           match
             enumerate_parameters dsl cxt selected.parameters
               (partial_of_program selected.expr)
