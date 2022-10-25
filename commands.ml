@@ -55,8 +55,7 @@ let string_of_partial_program (p : partial_program) : string =
   in
   go true p
 
-let select_at_point (ues : unifying_expression list) (point : float) :
-    unifying_expression list * unifying_expression =
+let select_at_point ues (point : float) =
   let n_exprs = List.length ues in
   let location =
     min (n_exprs - 1)
