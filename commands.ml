@@ -65,19 +65,27 @@ let select_at_point (ues : unifying_expression list) (point : float) :
   in
   (List.filteri ues ~f:(fun i _ -> i <> location), List.nth_exn ues location)
 
-let rec enumerate_argument dsl cxt req env search_points =
+let rec enumerate_terminal ?(state_input = Some 0) dsl cxt req search_points =
   match req with
-  | Arrow {left; right; _} ->
-      Option.value_map ~default:None ~f:(fun (b, cxt', prims') ->
-          Some (PAbstraction b, cxt', prims') )
-      @@ enumerate_argument dsl cxt right (left :: env) search_points
+  | Arrow {right; _} ->
+      let state_input =
+        Option.value_map state_input ~default:None ~f:(fun i ->
+            if i > 0 then
+              failwith
+                "enumerate_terminal: request must be of the form: state_type \
+                 -> state_type"
+            else Some (i + 1) )
+      in
+      enumerate_terminal ~state_input dsl cxt right search_points
+      |> Option.value_map ~default:None ~f:(fun (b, cxt', prims') ->
+             Some (PAbstraction b, cxt', prims') )
   | _ -> (
     match search_points with
     | point :: rest ->
         let rec go remaining_unified =
           let unselected, selected = select_at_point remaining_unified point in
           match
-            enumerate_application dsl cxt env selected.parameters
+            enumerate_parameters ~state_input dsl cxt selected.parameters
               (partial_of_program selected.expr)
               rest
           with
@@ -90,21 +98,24 @@ let rec enumerate_argument dsl cxt req env search_points =
     | _ ->
         None )
 
-and enumerate_application dsl cxt env parameters f search_points =
-  match parameters with
-  | [] ->
+and enumerate_parameters ?(state_input = None) dsl cxt parameters f
+    search_points =
+  match (state_input, parameters) with
+  | _, [] ->
       Some (f, cxt, search_points)
-  | x_1_ty :: rest ->
+  | Some _, _ :: [] ->
+      Some (PApply (f, PIndex 0), cxt, search_points)
+  | _, x_1_ty :: rest ->
       if List.length parameters > List.length search_points then None
       else
         let cxt, x_1_ty = apply_context cxt x_1_ty in
-        enumerate_argument dsl cxt x_1_ty env search_points
+        enumerate_terminal ~state_input:None dsl cxt x_1_ty search_points
         |> Option.value_map ~default:None ~f:(fun (x_1, cxt', search_points') ->
-               enumerate_application dsl cxt' env rest
+               enumerate_parameters ~state_input dsl cxt' rest
                  (PApply (f, x_1))
                  search_points' )
 
-let commands_to_program req gmr search_points =
-  enumerate_argument gmr empty_type_context req [] search_points
+let commands_to_program req dsl search_points =
+  enumerate_terminal dsl empty_type_context req search_points
   |> Option.value_map ~default:None ~f:(fun (p, _, prim_indices') ->
          Some (program_of_partial p, List.length prim_indices') )
