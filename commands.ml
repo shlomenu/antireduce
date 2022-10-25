@@ -55,6 +55,16 @@ let string_of_partial_program (p : partial_program) : string =
   in
   go true p
 
+let rec parameters_length_aux dsl len = function
+  | [] ->
+      len
+  | last :: [] when equal_dc_type last dsl.state_type ->
+      len
+  | _ :: rest ->
+      parameters_length_aux dsl (len + 1) rest
+
+let parameters_length dsl = parameters_length_aux dsl 0
+
 let rec enumerate_terminal dsl cxt req search_points =
   match req with
   | Arrow {right; _} ->
@@ -91,7 +101,7 @@ and enumerate_parameters dsl cxt parameters f search_points =
   | last :: [] when equal_dc_type last dsl.state_type ->
       Some (PApply (f, PIndex 0), cxt, search_points)
   | x_1_ty :: rest ->
-      if List.length parameters > List.length search_points then None
+      if parameters_length dsl parameters > List.length search_points then None
       else
         let cxt, x_1_ty = apply_context cxt x_1_ty in
         enumerate_terminal dsl cxt x_1_ty search_points
