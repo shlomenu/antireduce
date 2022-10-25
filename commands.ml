@@ -64,18 +64,10 @@ let select_at_point ues (point : float) =
   in
   (List.filteri ues ~f:(fun i _ -> i <> location), List.nth_exn ues location)
 
-let rec enumerate_terminal ?(state_input = Some 0) dsl cxt req search_points =
+let rec enumerate_terminal dsl cxt req search_points =
   match req with
   | Arrow {right; _} ->
-      let state_input =
-        Option.value_map state_input ~default:None ~f:(fun i ->
-            if i > 0 then
-              failwith
-                "enumerate_terminal: request must be of the form: state_type \
-                 -> state_type"
-            else Some (i + 1) )
-      in
-      enumerate_terminal ~state_input dsl cxt right search_points
+      enumerate_terminal dsl cxt right search_points
       |> Option.value_map ~default:None ~f:(fun (b, cxt', prims') ->
              Some (PAbstraction b, cxt', prims') )
   | _ -> (
@@ -84,7 +76,7 @@ let rec enumerate_terminal ?(state_input = Some 0) dsl cxt req search_points =
         let rec go remaining_unified =
           let unselected, selected = select_at_point remaining_unified point in
           match
-            enumerate_parameters ~state_input dsl cxt selected.parameters
+            enumerate_parameters dsl cxt selected.parameters
               (partial_of_program selected.expr)
               rest
           with
@@ -97,24 +89,27 @@ let rec enumerate_terminal ?(state_input = Some 0) dsl cxt req search_points =
     | _ ->
         None )
 
-and enumerate_parameters ?(state_input = None) dsl cxt parameters f
-    search_points =
-  match (state_input, parameters) with
-  | _, [] ->
+and enumerate_parameters dsl cxt parameters f search_points =
+  match parameters with
+  | [] ->
       Some (f, cxt, search_points)
-  | Some _, _ :: [] ->
+  | last :: [] when equal_dc_type last dsl.state_type ->
       Some (PApply (f, PIndex 0), cxt, search_points)
-  | _, x_1_ty :: rest ->
+  | x_1_ty :: rest ->
       if List.length parameters > List.length search_points then None
       else
         let cxt, x_1_ty = apply_context cxt x_1_ty in
-        enumerate_terminal ~state_input:None dsl cxt x_1_ty search_points
+        enumerate_terminal dsl cxt x_1_ty search_points
         |> Option.value_map ~default:None ~f:(fun (x_1, cxt', search_points') ->
-               enumerate_parameters ~state_input dsl cxt' rest
+               enumerate_parameters dsl cxt' rest
                  (PApply (f, x_1))
                  search_points' )
 
 let commands_to_program req dsl search_points =
+  if not (equal_dc_type req @@ arrow dsl.state_type dsl.state_type) then
+    failwith
+      "commands_to_program: requested type must be of the form: dsl.state_type \
+       -> dsl.state_type" ;
   enumerate_terminal dsl empty_type_context req search_points
   |> Option.value_map ~default:None ~f:(fun (p, _, prim_indices') ->
          Some (program_of_partial p, List.length prim_indices') )

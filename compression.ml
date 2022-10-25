@@ -230,7 +230,8 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                        if List.mem ~equal:equal_program primitives new_primitive
                        then raise DuplicatePrimitive ;
                        let dsl' =
-                         dedup_dsl_of_primitives (new_primitive :: primitives)
+                         dedup_dsl_of_primitives dsl.state_type
+                           (new_primitive :: primitives)
                        in
                        let rewriter = rewrite_with_invention new_primitive in
                        let new_cost_tbl = empty_cheap_cost_tbl tbl in

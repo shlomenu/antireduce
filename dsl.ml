@@ -24,21 +24,17 @@ let primitive_entry_of_yojson = function
   | _ ->
       failwith "primitive_entry_of_yojson: invalid JSON"
 
-type dsl = {library: primitive_entry list; state_type: dc_type option; size: int}
+type dsl = {library: primitive_entry list; state_type: dc_type; size: int}
 [@@deriving yojson]
 
 let string_of_dsl dsl =
-  ( match dsl.state_type with
-  | Some state_ty ->
-      Printf.sprintf "state type : %s\n" (string_of_dc_type state_ty)
-  | None ->
-      "" )
+  Printf.sprintf "state type : %s\n" (string_of_dc_type dsl.state_type)
   ^ "\tt0\t$_\n"
   ^ String.concat ~sep:"\n"
       (List.map dsl.library ~f:(fun ent ->
            string_of_dc_type ent.ty ^ "\t" ^ ent.name ) )
 
-let dsl_of_primitives ?(state_type : dc_type option) primitives =
+let dsl_of_primitives state_type primitives =
   let library =
     List.map primitives ~f:(function
       | Primitive {name; ty} ->
@@ -55,7 +51,7 @@ let dsl_of_primitives ?(state_type : dc_type option) primitives =
 
 exception DuplicatePrimitive
 
-let dedup_dsl_of_primitives ?(state_type = None) primitives =
+let dedup_dsl_of_primitives state_type primitives =
   let n_unique_prims =
     List.length @@ List.dedup_and_sort ~compare:compare_program primitives
   in
@@ -102,42 +98,38 @@ let log_prob_under_dsl dsl = Fn.compose log (prob_under_dsl dsl)
 type unifying_expression =
   {expr: program; parameters: dc_type list; context: type_context}
 
-let unifying_indices dsl env req cxt =
-  List.filter_mapi env ~f:(fun i ty ->
-      let expr = Index i in
-      let context, ty = apply_context cxt ty in
-      let terminal_ty = terminal_of_type ty in
-      if might_unify terminal_ty req then
-        try
-          let context = unify context terminal_ty req in
-          let context, ty = apply_context context ty in
-          let parameters = parameters_of_type ty in
-          Some {expr; parameters; context}
-        with UnificationFailure -> None
-      else None )
-  |>
-  match dsl.state_type with
-  | Some state_ty when equal_dc_type state_ty req ->
-      fun unified ->
-        let terminal_indices =
-          let f ent =
-            if List.is_empty ent.parameters then Some (int_of_index ent.expr)
-            else None
-          in
-          List.filter_map unified ~f
-        in
-        if List.is_empty terminal_indices then unified
-        else
-          let min_terminal_index = Util.fold1 min terminal_indices in
-          let f ent =
-            not
-              ( is_index ent.expr
-              && List.is_empty ent.parameters
-              && int_of_index ent.expr <> min_terminal_index )
-          in
-          List.filter unified ~f
-  | _ ->
-      Fn.id
+let unifying_indices env req cxt =
+  let unified =
+    List.filter_mapi env ~f:(fun i ty ->
+        let expr = Index i in
+        let context, ty = apply_context cxt ty in
+        let terminal_ty = terminal_of_type ty in
+        if might_unify terminal_ty req then
+          try
+            let context = unify context terminal_ty req in
+            let context, ty = apply_context context ty in
+            let parameters = parameters_of_type ty in
+            Some {expr; parameters; context}
+          with UnificationFailure -> None
+        else None )
+  in
+  let terminal_indices =
+    let f ent =
+      if List.is_empty ent.parameters then Some (int_of_index ent.expr)
+      else None
+    in
+    List.filter_map unified ~f
+  in
+  if List.is_empty terminal_indices then unified
+  else
+    let min_terminal_index = Util.fold1 min terminal_indices in
+    let f ent =
+      not
+        ( is_index ent.expr
+        && List.is_empty ent.parameters
+        && int_of_index ent.expr <> min_terminal_index )
+    in
+    List.filter unified ~f
 
 let unifying_primitives dsl req cxt =
   List.filter_map dsl.library ~f:(fun ent ->
@@ -150,7 +142,7 @@ let unifying_primitives dsl req cxt =
       with UnificationFailure -> None )
 
 let unifying_expressions dsl env req cxt =
-  unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt
+  unifying_indices env req cxt @ unifying_primitives dsl req cxt
 
 type 'a likelihood_factorization =
   { normalizers: ('a list, float) Hashtbl.t
