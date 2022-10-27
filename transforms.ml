@@ -7,10 +7,6 @@ module SU = Yojson.Safe.Util
 
 let request_file = "request.json"
 
-let dsl_dir = "dsls"
-
-let transforms_dir = "discrete_representations"
-
 type transform = {name: string; program: program}
 
 type 'a candidate_transform =
@@ -37,8 +33,6 @@ let load_dsl_from dir j =
   dsl_of_yojson @@ S.from_file @@ Filename.concat dir @@ SU.to_string
   @@ SU.member "dsl_file" j
 
-let load_dsl = load_dsl_from dsl_dir
-
 let load_transforms_from domain parse dir =
   Sys.readdir dir
   |> Array.filter_map ~f:(fun filename ->
@@ -52,8 +46,6 @@ let load_transforms_from domain parse dir =
 let log_dsl_to dir new_dsl_file new_dsl =
   let new_dsl_fn = Filename.concat dir new_dsl_file in
   S.to_file new_dsl_fn @@ yojson_of_dsl new_dsl
-
-let log_dsl = log_dsl_to dsl_dir
 
 let overwrite_transforms programs' paths transforms =
   let transforms' =
