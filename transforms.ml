@@ -65,7 +65,6 @@ let commands_to_transform ~(default_program : program)
   let translated, timed_out, p, n_unused, output =
     match Commands.commands_to_program transform_type dsl cmds with
     | Some (p, n_unused) ->
-        Format.eprintf "%s\n" (string_of_program @@ beta_normal_form p) ;
         Out_channel.flush stderr ;
         let timed_out, output =
           match evaluate p with
