@@ -5,8 +5,6 @@ open Dsl
 module S = Yojson.Safe
 module SU = Yojson.Safe.Util
 
-let request_file = "request.json"
-
 type transform = {name: string; program: program}
 
 type 'a candidate_transform =
@@ -25,14 +23,6 @@ let verbose_duplicates m convert priority l =
   Hashtbl.fold dedup ~init:([], []) ~f:(fun ~key:_ ~data (to_discard, kept) ->
       (List.drop data 1 :: to_discard, List.hd_exn data :: kept) )
 
-let load_request_from = Fn.compose dc_type_of_yojson S.from_file
-
-let load_request () = load_request_from request_file
-
-let load_dsl_from dir j =
-  dsl_of_yojson @@ S.from_file @@ Filename.concat dir @@ SU.to_string
-  @@ SU.member "dsl_file" j
-
 let load_transforms_from domain parse dir =
   Sys.readdir dir
   |> Array.filter_map ~f:(fun filename ->
@@ -42,10 +32,6 @@ let load_transforms_from domain parse dir =
            Some (parse @@ SU.to_string @@ SU.member "program" j, path, j)
          else None )
   |> Array.to_list |> Util.unzip3
-
-let log_dsl_to dir new_dsl_file new_dsl =
-  let new_dsl_fn = Filename.concat dir new_dsl_file in
-  S.to_file new_dsl_fn @@ yojson_of_dsl new_dsl
 
 let overwrite_transforms programs' paths transforms =
   let transforms' =
