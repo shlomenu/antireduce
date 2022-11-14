@@ -221,7 +221,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                    let new_primitive =
                      normalize_invention @@ Util.singleton_list @@ extract tbl i
                    in
-                   Format.eprintf "normalized_invention: %s"
+                   Format.eprintf "normalized_invention: %s\n"
                    @@ string_of_program new_primitive ;
                    let score, dsl', transforms' =
                      try
@@ -238,10 +238,9 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                        let transforms' =
                          List.zip_exn transform_versions transforms
                          |> List.mapi ~f:(fun l (j, p) ->
-                                Util.time_it
-                                  (Format.sprintf
-                                     "rewriting program %d with new primitive %d\n"
-                                     l k ) (fun () ->
+                                Format.eprintf "rewriting program.. %s\n"
+                                  (string_of_program p) ;
+                                Util.time_it "done\n" (fun () ->
                                     let p' =
                                       try
                                         Util.value_exn
