@@ -23,7 +23,7 @@ let verbose_duplicates m convert priority l =
       (List.drop data 1 :: to_discard, List.hd_exn data :: kept) )
 
 let load_transforms_from parse dir =
-  Sys.readdir dir
+  Caml.Sys.readdir dir
   |> Array.filter_map ~f:(fun filename ->
          let path = Filename.concat dir filename in
          let j = S.from_file path in
@@ -39,7 +39,7 @@ let overwrite_transforms programs' paths transforms =
   in
   List.zip_exn paths transforms'
   |> List.iter ~f:(fun (path, transform') ->
-         Sys.remove path ; S.to_file path transform' )
+         Caml.Sys.remove path ; S.to_file path transform' )
 
 let commands_to_transform ~(default_program : program)
     ~(default_output : unit -> 'b) ~(evaluate : program -> 'a option)

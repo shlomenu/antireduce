@@ -95,25 +95,25 @@ let run_once_for_interval (time : float) (f : unit -> 'a) : 'a option =
   let reset_sigalrm () = Sys.set_signal Sys.sigalrm old_behavior in
   try
     ignore
-      ( Unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= time}
-        : Unix.interval_timer_status ) ;
+      ( Core_unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= time}
+        : Core_unix.interval_timer_status ) ;
     let result = f () in
     ignore
-      ( Unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= 0.0}
-        : Unix.interval_timer_status ) ;
+      ( Core_unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= 0.0}
+        : Core_unix.interval_timer_status ) ;
     reset_sigalrm () ;
     Some result
   with
   | Timeout ->
       ignore
-        ( Unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= 0.0}
-          : Unix.interval_timer_status ) ;
+        ( Core_unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= 0.0}
+          : Core_unix.interval_timer_status ) ;
       reset_sigalrm () ;
       None
   | e ->
       ignore
-        ( Unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= 0.0}
-          : Unix.interval_timer_status ) ;
+        ( Core_unix.setitimer ITIMER_REAL {it_interval= 0.0; it_value= 0.0}
+          : Core_unix.interval_timer_status ) ;
       reset_sigalrm () ;
       raise e
 
