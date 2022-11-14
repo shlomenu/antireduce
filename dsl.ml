@@ -249,15 +249,17 @@ let record_factor fact used possible =
         1. )
 
 let likelihood_of_factorization dsl fact =
-  let log_prob_of = log_prob_under_dsl dsl in
+  let prob_of = prob_under_dsl dsl in
   fact.constant
   +. Hashtbl.fold fact.uses ~init:0. ~f:(fun ~key ~data log_prob ->
-         log_prob +. (data *. log_prob_of key) )
+         log_prob +. (data *. log (prob_of key)) )
   -. Hashtbl.fold fact.normalizers ~init:0. ~f:(fun ~key ~data log_prob ->
-         let log_sum =
-           List.reduce_exn ~f:( +. ) @@ List.map key ~f:log_prob_of
+         let probs = List.map key ~f:prob_of in
+         let max_prob = List.reduce_exn ~f:Float.max probs in
+         let lse =
+           log @@ List.reduce_exn ~f:(fun s a -> s +. exp (a -. max_prob)) probs
          in
-         log_prob +. (data *. log log_sum) )
+         log_prob +. (data *. lse) )
 
 let factorize dsl req p =
   let rec walk_application_tree = function
