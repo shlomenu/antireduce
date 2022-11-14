@@ -1,7 +1,6 @@
 open Core
 open Type
 open Program
-open Dsl
 module S = Yojson.Safe
 module SU = Yojson.Safe.Util
 
@@ -29,7 +28,7 @@ let load_transforms_from domain parse dir =
          let path = Filename.concat dir filename in
          let j = S.from_file path in
          if String.(domain = SU.to_string @@ SU.member "domain" j) then
-           Some (parse @@ SU.to_string @@ SU.member "program" j, path, j)
+           Some (parse @@ SU.to_string @@ SU.member "original" j, path, j)
          else None )
   |> Array.to_list |> Util.unzip3
 
