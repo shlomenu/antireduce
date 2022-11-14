@@ -22,14 +22,12 @@ let verbose_duplicates m convert priority l =
   Hashtbl.fold dedup ~init:([], []) ~f:(fun ~key:_ ~data (to_discard, kept) ->
       (List.drop data 1 :: to_discard, List.hd_exn data :: kept) )
 
-let load_transforms_from domain parse dir =
+let load_transforms_from parse dir =
   Sys.readdir dir
   |> Array.filter_map ~f:(fun filename ->
          let path = Filename.concat dir filename in
          let j = S.from_file path in
-         if String.(domain = SU.to_string @@ SU.member "domain" j) then
-           Some (parse @@ SU.to_string @@ SU.member "original" j, path, j)
-         else None )
+         Some (parse @@ SU.to_string @@ SU.member "original" j, path, j) )
   |> Array.to_list |> Util.unzip3
 
 let overwrite_transforms programs' paths transforms =
