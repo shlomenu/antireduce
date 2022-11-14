@@ -61,7 +61,12 @@ let eta_expansion req p =
             | Primitive {ty; _} | Invented (ty, _) ->
                 instantiate_type_ref cxt_ref ty
             | Abstraction _ | Apply _ ->
-                failwith "eta_expansion"
+                failwith
+                  "eta_expansion: input is not fully beta-reduced: this could \
+                   occur because of a flaw in the program synthesis procedure \
+                   or because the input has undergone inverse beta-reduction \
+                   and the internal abstractions introduced have not been \
+                   properly marked as representing new (invented) primitives"
           in
           unify_ref cxt_ref req @@ terminal_of_type f_ty ;
           let f_ty = apply_context_ref cxt_ref f_ty in
@@ -99,7 +104,7 @@ let normalize_invention i =
   in
   invention @@ List.fold_right m ~init:(go 0 i) ~f:(fun _ e -> Abstraction e)
 
-let rewrite_with_invention i =
+let rewrite_with_invention i req e =
   let m =
     free_variables i
     |> List.dedup_and_sort ~compare:( - )
@@ -110,43 +115,40 @@ let rewrite_with_invention i =
     |> List.fold ~init:(normalize_invention i) ~f:(fun e j ->
            Apply (e, Index (List.Assoc.find_exn ~equal m j)) )
   in
-  let rec go e =
-    if equal_program e i then applied_invention
-    else
-      match e with
-      | Apply (f, x) ->
-          Apply (go f, go x)
-      | Abstraction b ->
-          Abstraction (go b)
-      | Index _ | Primitive _ | Invented _ ->
-          e
+  let rec go = function
+    | e when equal_program e i ->
+        applied_invention
+    | Apply (f, x) ->
+        Apply (go f, go x)
+    | Abstraction b ->
+        Abstraction (go b)
+    | e ->
+        e
   in
-  fun req e ->
-    try
-      let e' = eta_expansion req @@ go e in
-      assert (
-        equal_program
-          (beta_normal_form ~reduce_invented:true e)
-          (beta_normal_form ~reduce_invented:true e') ) ;
-      e'
-    with UnificationFailure ->
-      if !verbose_compression then (
-        Printf.eprintf
-          "WARNING: rewriting with invention gave ill typed term.\n" ;
-        Printf.eprintf "Original:\t\t%s\n" (string_of_program e) ;
-        Printf.eprintf "Original:\t\t%s\n"
-          (string_of_program @@ beta_normal_form ~reduce_invented:true e) ;
-        Printf.eprintf "Rewritten:\t\t%s\n" (string_of_program @@ go e) ;
-        Printf.eprintf "Rewritten:\t\t%s\n"
-          (string_of_program @@ beta_normal_form ~reduce_invented:true @@ go e) ;
-        Printf.eprintf
-          "Going to proceed as if the rewrite had failed - but look into this \
-           because it could be a bug.\n" ;
-        Util.flush_all () ) ;
-      let normal_original = beta_normal_form e ~reduce_invented:true in
-      let normal_rewritten = beta_normal_form ~reduce_invented:true @@ go e in
-      assert (equal_program normal_original normal_rewritten) ;
-      raise EtaExpandFailure
+  try
+    let e' = eta_expansion req @@ go e in
+    assert (
+      equal_program
+        (beta_normal_form ~reduce_invented:true e)
+        (beta_normal_form ~reduce_invented:true e') ) ;
+    e'
+  with UnificationFailure ->
+    if !verbose_compression then (
+      Printf.eprintf "WARNING: rewriting with invention gave ill typed term.\n" ;
+      Printf.eprintf "Original:\t\t%s\n" (string_of_program e) ;
+      Printf.eprintf "Original:\t\t%s\n"
+        (string_of_program @@ beta_normal_form ~reduce_invented:true e) ;
+      Printf.eprintf "Rewritten:\t\t%s\n" (string_of_program @@ go e) ;
+      Printf.eprintf "Rewritten:\t\t%s\n"
+        (string_of_program @@ beta_normal_form ~reduce_invented:true @@ go e) ;
+      Printf.eprintf
+        "Going to proceed as if the rewrite had failed - but look into this \
+         because it could be a bug.\n" ;
+      Util.flush_all () ) ;
+    let normal_original = beta_normal_form e ~reduce_invented:true in
+    let normal_rewritten = beta_normal_form ~reduce_invented:true @@ go e in
+    assert (equal_program normal_original normal_rewritten) ;
+    raise EtaExpandFailure
 
 let nontrivial e =
   let indices = ref [] in
@@ -218,22 +220,21 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
           (fun () ->
             Util.minimum_by ~compare:Float.compare ~f:(fun (s, _, _, _) -> -.s)
             @@ List.mapi ranked_refactorings ~f:(fun k (cost, i) ->
-                   let new_primitive =
-                     normalize_invention @@ Util.singleton_list @@ extract tbl i
-                   in
+                   Gc.compact () ;
+                   let invention_body = Util.singleton_list @@ extract tbl i in
+                   let new_primitive = normalize_invention invention_body in
                    Format.eprintf "normalized_invention: %s\n"
                    @@ string_of_program new_primitive ;
                    let score, dsl', transforms' =
                      try
-                       Gc.compact () ;
                        let primitives = primitives_of_dsl dsl in
                        if List.mem ~equal:equal_program primitives new_primitive
                        then raise DuplicatePrimitive ;
+                       let rewriter = rewrite_with_invention invention_body in
                        let dsl' =
                          dedup_dsl_of_primitives dsl.state_type
                            (new_primitive :: primitives)
                        in
-                       let rewriter = rewrite_with_invention new_primitive in
                        let new_cost_tbl = empty_cheap_cost_tbl tbl in
                        let transforms' =
                          List.zip_exn transform_versions transforms
