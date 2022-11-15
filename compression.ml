@@ -177,13 +177,12 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
   let tbl = new_version_tbl () in
   let cost_tbl = empty_cost_tbl tbl in
   let transform_versions =
-    Util.time_it "calculated version spaces" (fun () ->
+    Util.time_it "calculated n-step beta inversions.. \n" (fun () ->
         List.map transforms ~f:(fun p ->
-            Util.time_it
-              (Format.sprintf "n-step inversion.. %s\n" (string_of_program p))
-              (fun () ->
-                n_step_inversion ~inlining tbl ~n:n_beta_inversions
-                @@ incorporate tbl p ) ) )
+            if !verbose_compression then
+              Format.eprintf "n-step inversion.. %s\n" (string_of_program p) ;
+            n_step_inversion ~inlining tbl ~n:n_beta_inversions
+            @@ incorporate tbl p ) )
   in
   let refactorings =
     Util.time_it "proposed refactorings.." (fun () ->
@@ -210,21 +209,20 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
             beams_and_costs ~cost_tbl ~beam_size refactorings transform_versions
             |> Fn.flip List.take top_i )
       in
-      Format.eprintf "List.length ranked_refactorings: %d\n"
-      @@ List.length ranked_refactorings ;
       Util.flush_all () ;
       let initial_score = score transforms dsl in
       Format.eprintf "Initial score: %f\n" initial_score ;
       let[@warning "-27"] best_score, dsl', transforms', best_i =
-        Util.time_it (Printf.sprintf "Evaluated top-%d refactorings" top_i)
+        Util.time_it (Printf.sprintf "Evaluated top %d refactorings" top_i)
           (fun () ->
             Util.minimum_by ~compare:Float.compare ~f:(fun (s, _, _, _) -> -.s)
             @@ List.mapi ranked_refactorings ~f:(fun k (cost, i) ->
                    Gc.compact () ;
                    let invention_body = Util.singleton_list @@ extract tbl i in
                    let new_primitive = normalize_invention invention_body in
-                   Format.eprintf "normalized_invention: %s\n"
-                   @@ string_of_program new_primitive ;
+                   if !verbose_compression then
+                     Format.eprintf "Normalized invention: %s\n"
+                     @@ string_of_program new_primitive ;
                    let score, dsl', transforms' =
                      try
                        let primitives = primitives_of_dsl dsl in
@@ -239,24 +237,23 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                        let transforms' =
                          List.zip_exn transform_versions transforms
                          |> List.mapi ~f:(fun l (j, p) ->
-                                Format.eprintf "rewriting program.. %s\n"
-                                  (string_of_program p) ;
-                                Util.time_it "done\n" (fun () ->
-                                    let p' =
-                                      try
-                                        Util.value_exn
-                                        @@ minimal_inhabitant new_cost_tbl
-                                             ~given:(Some i) j
-                                      with _ ->
-                                        Format.eprintf
-                                          "could not find minimal inhabitant \
-                                           of %s\n"
-                                        @@ string_of_program
-                                        @@ Util.singleton_list @@ extract tbl j ;
-                                        failwith "failed"
-                                    in
-                                    try rewriter request p'
-                                    with EtaExpandFailure -> p ) )
+                                if !verbose_compression then
+                                  Format.eprintf "rewriting program.. %s\n"
+                                    (string_of_program p) ;
+                                let p' =
+                                  try
+                                    Util.value_exn
+                                    @@ minimal_inhabitant new_cost_tbl
+                                         ~given:(Some i) j
+                                  with _ ->
+                                    Format.eprintf
+                                      "could not find minimal inhabitant of %s\n"
+                                    @@ string_of_program @@ Util.singleton_list
+                                    @@ extract tbl j ;
+                                    failwith "failed"
+                                in
+                                try rewriter request p'
+                                with EtaExpandFailure -> p )
                        in
                        (score transforms' dsl', dsl', transforms')
                      with UnificationFailure | DuplicatePrimitive ->
@@ -264,9 +261,9 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                    in
                    if !verbose_compression then (
                      Printf.eprintf
-                       "Invention %s : %s\n\
-                        Discrete score %f\n\
-                        \tContinuous score %f\n\n"
+                       "Invention: (%s : %s)\n\
+                        Refactored programs size (total): %f\n\
+                        Multifactor score: %f\n\n"
                        (string_of_program new_primitive)
                        (string_of_dc_type @@ closed_inference new_primitive)
                        cost score ;
@@ -275,7 +272,8 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
       in
       let new_primitive = List.hd_exn @@ primitives_of_dsl dsl' in
       Printf.eprintf
-        "Improved score to %f (d_score=%f) w/ new primitive\n\t%s : %s\n"
+        "Improved score to %f (difference of %f) w/ new primitive\n\
+         \t(%s : %s)\n"
         best_score
         (best_score -. initial_score)
         (string_of_program new_primitive)
