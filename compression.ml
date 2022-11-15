@@ -177,10 +177,13 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
   let tbl = new_version_tbl () in
   let cost_tbl = empty_cost_tbl tbl in
   let transform_versions =
-    Util.time_it "calculated n-step beta inversions.. \n" (fun () ->
+    Util.time_it
+      (Format.sprintf "calculated %d-step beta inversions.. \n"
+         n_beta_inversions ) (fun () ->
         List.map transforms ~f:(fun p ->
             if !verbose_compression then
-              Format.eprintf "n-step inversion.. %s\n" (string_of_program p) ;
+              Format.eprintf "%d-step inversion.. %s\n" n_beta_inversions
+                (string_of_program p) ;
             n_step_inversion ~inlining tbl ~n:n_beta_inversions
             @@ incorporate tbl p ) )
   in
@@ -211,7 +214,6 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
       in
       Util.flush_all () ;
       let initial_score = score transforms dsl in
-      Format.eprintf "Initial score: %f\n" initial_score ;
       let[@warning "-27"] best_score, dsl', transforms', best_i =
         Util.time_it (Printf.sprintf "Evaluated top %d refactorings" top_i)
           (fun () ->
@@ -272,9 +274,9 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
       in
       let new_primitive = List.hd_exn @@ primitives_of_dsl dsl' in
       Printf.eprintf
-        "Improved score to %f (difference of %f) w/ new primitive\n\
+        "Improved score from %f to %f (difference: %f) w/ new primitive\n\
          \t(%s : %s)\n"
-        best_score
+        best_score initial_score
         (best_score -. initial_score)
         (string_of_program new_primitive)
         (string_of_dc_type @@ canonical_type @@ closed_inference new_primitive) ;
@@ -320,11 +322,8 @@ let compress ?(n_cores = 1) ~dsl_size_penalty ~inlining ~primitive_size_penalty
           if List.mem ~equal:equal_program (subexpressions p) prim then Some p
           else None )
     in
-    Printf.eprintf
-      "New primitive is used %d times in the best programs in each of the \
-       frontiers.\n"
+    Printf.eprintf "New primitive is used %d times: \n"
       (List.length illustrations) ;
-    Printf.eprintf "Here is where it is used:\n" ;
     List.iter illustrations ~f:(fun p ->
         Printf.eprintf "  %s\n" (string_of_program p) )
   in
