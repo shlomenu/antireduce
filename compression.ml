@@ -6,7 +6,7 @@ open Versions
 module T = Domainslib.Task
 module C = Domainslib.Chan
 
-let verbose_compression = ref false
+let compression_verbosity = ref 0
 
 let collect_data = ref false
 
@@ -133,7 +133,7 @@ let rewrite_with_invention i req e =
         (beta_normal_form ~reduce_invented:true e') ) ;
     e'
   with UnificationFailure ->
-    if !verbose_compression then (
+    if !compression_verbosity >= 4 then (
       Printf.eprintf "WARNING: rewriting with invention gave ill typed term.\n" ;
       Printf.eprintf "Original:\t\t%s\n" (string_of_program e) ;
       Printf.eprintf "Original:\t\t%s\n"
@@ -181,7 +181,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
       (Format.sprintf "calculated %d-step beta inversions.. \n"
          n_beta_inversions ) (fun () ->
         List.map transforms ~f:(fun p ->
-            if !verbose_compression then
+            if !compression_verbosity >= 3 then
               Format.eprintf "%d-step inversion.. %s\n" n_beta_inversions
                 (string_of_program p) ;
             n_step_inversion ~inlining tbl ~n:n_beta_inversions
@@ -222,7 +222,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                    Gc.compact () ;
                    let invention_body = Util.singleton_list @@ extract tbl i in
                    let new_primitive = normalize_invention invention_body in
-                   if !verbose_compression then
+                   if !compression_verbosity >= 3 then
                      Format.eprintf "Normalized invention: %s\n"
                      @@ string_of_program new_primitive ;
                    let score, dsl', transforms' =
@@ -239,7 +239,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                        let transforms' =
                          List.zip_exn transform_versions transforms
                          |> List.mapi ~f:(fun l (j, p) ->
-                                if !verbose_compression then
+                                if !compression_verbosity >= 3 then
                                   Format.eprintf "rewriting program.. %s\n"
                                     (string_of_program p) ;
                                 let p' =
@@ -248,11 +248,12 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                                     @@ minimal_inhabitant new_cost_tbl
                                          ~given:(Some i) j
                                   with _ ->
-                                    Format.eprintf
-                                      "could not find minimal inhabitant of %s\n"
+                                    failwith
+                                    @@ Format.sprintf
+                                         "could not find minimal inhabitant of \
+                                          %s\n"
                                     @@ string_of_program @@ Util.singleton_list
-                                    @@ extract tbl j ;
-                                    failwith "failed"
+                                    @@ extract tbl j
                                 in
                                 try rewriter request p'
                                 with EtaExpandFailure -> p )
@@ -261,7 +262,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                      with UnificationFailure | DuplicatePrimitive ->
                        (Float.neg_infinity, dsl, transforms)
                    in
-                   if !verbose_compression then (
+                   if !compression_verbosity >= 2 then (
                      Printf.eprintf
                        "Invention: (%s : %s)\n\
                         Refactored programs size (total): %f\n\
@@ -340,8 +341,9 @@ let compress ?(n_cores = 1) ~dsl_size_penalty ~inlining ~primitive_size_penalty
       | None ->
           (dsl, frontiers)
       | Some (dsl', frontiers') ->
-          illustrate_new_primitive (find_new_primitive dsl dsl') frontiers' ;
-          if !verbose_compression && iterations > 1 then
+          if !compression_verbosity >= 1 then
+            illustrate_new_primitive (find_new_primitive dsl dsl') frontiers' ;
+          if !compression_verbosity >= 4 && iterations > 1 then
             export_compression_checkpoint ~n_cores ~dsl_size_penalty
               ~primitive_size_penalty ~n_beta_inversions ~beam_size ~top_i dsl'
               frontiers' ;
