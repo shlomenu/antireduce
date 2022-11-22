@@ -277,7 +277,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
       Printf.eprintf
         "Improved score from %f to %f (difference: %f) w/ new primitive\n\
          \t(%s : %s)\n"
-        best_score initial_score
+        initial_score best_score
         (best_score -. initial_score)
         (string_of_program new_primitive)
         (string_of_dc_type @@ canonical_type @@ closed_inference new_primitive) ;
