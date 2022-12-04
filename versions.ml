@@ -136,6 +136,8 @@ let rec incorporate tbl = function
   | (Primitive _ | Invented _) as p ->
       version_of_terminal tbl p
 
+(* returned list is length 1 unless unions of length > 1 are recursively
+     present at some level of the version space *)
 let rec extract tbl i =
   match version_of_int tbl i with
   | Union u ->
@@ -154,6 +156,23 @@ let rec extract tbl i =
       extract tbl b |> List.map ~f:(fun b' -> Abstraction b')
   | Universe ->
       [Primitive {ty= Id 0; name= "UNIVERSE"}]
+
+(* unions are created when finding substitutions, after incorporating all
+    frontier programs.  If extracting a program for a version space known
+    to represent a frontier program (or part of one), extract should return
+    exactly one program. *)
+let extract_frontier_program tbl i =
+  match extract tbl i with
+  | [p] ->
+      p
+  | [] ->
+      failwith
+        "extract returned zero inhabitants for version space of frontier \
+         program"
+  | _ ->
+      failwith
+        "extract returned multiple inhabitants for version space of frontier \
+         program (contains zero unions)"
 
 let rec child_spaces tbl i =
   let children =
@@ -660,7 +679,7 @@ let rec minimum_cost_inhabitants ?(given = None) ?(can_be_lambda = true)
                 List.map u
                   ~f:(minimum_cost_inhabitants ~given ~can_be_lambda cost_tbl)
               in
-              let c = Util.fold1 Float.min @@ List.map children ~f:fst in
+              let c = Util.fold1 ~f:Float.min @@ List.map children ~f:fst in
               if Util.is_invalid c then (c, [])
               else
                 let children =
@@ -730,7 +749,7 @@ let rec minimal_inhabitant_cost ?(memo = None) ?(given = None)
           | IndexSpace _ | TerminalSpace _ ->
               1.
           | Union u ->
-              Util.fold1 Float.min
+              Util.fold1 ~f:Float.min
               @@ List.map u
                    ~f:
                      (minimal_inhabitant_cost ~memo ~given ~can_be_lambda
@@ -759,18 +778,18 @@ let rec minimal_inhabitant ?(memo = None) ?(given = None)
       match (c, given) with
       | 1., Some invention when intersecting ~memo cost_tbl.parent invention i
         ->
-          Util.singleton_list @@ extract cost_tbl.parent invention
+          extract_frontier_program cost_tbl.parent invention
       | _ -> (
         match version_of_int cost_tbl.parent i with
         | Universe | Void ->
             failwith "minimal_inhabitant"
         | IndexSpace _ | TerminalSpace _ ->
-            Util.singleton_list @@ extract cost_tbl.parent i
+            extract_frontier_program cost_tbl.parent i
         | Union u ->
             Util.value_exn
             @@ minimal_inhabitant ~memo ~given ~can_be_lambda cost_tbl
-            @@ Util.minimum_by u ~compare:Float.compare
-                 ~f:
+            @@ Util.minimum u ~compare:Float.compare
+                 ~key:
                    (minimal_inhabitant_cost ~memo ~given ~can_be_lambda cost_tbl)
         | AbstractionSpace b ->
             Abstraction
@@ -826,12 +845,13 @@ let refactorings_costs tbl refactorings =
       let cost =
         Float.of_int @@ List.length
         @@ List.dedup_and_sort ~compare:( - )
-        @@ free_variables @@ Util.singleton_list @@ extract tbl refactoring
+        @@ free_variables
+        @@ extract_frontier_program tbl refactoring
       in
       Hashtbl.set costs ~key:refactoring ~data:(1. +. cost) ) ;
   costs
 
-let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings transforms =
+let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings frontier =
   let costs = refactorings_costs cost_tbl.parent refactorings in
   let refactorings = Hash_set.Poly.of_list refactorings in
   let cache = Array_list.create () in
@@ -891,20 +911,20 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings transforms =
         Array_list.set cache i (Some beam) ;
         beam
   in
-  List.iter transforms ~f:(fun i -> ignore (go i : beam)) ;
+  List.iter frontier ~f:(fun i -> ignore (go i : beam)) ;
   cache
 
-let beam_costs ~cost_tbl ~beam_size refactorings transforms =
-  let cache = beams ~cost_tbl ~beam_size refactorings transforms in
+let beam_costs ~cost_tbl ~beam_size refactorings frontier =
+  let cache = beams ~cost_tbl ~beam_size refactorings frontier in
   let beams =
-    List.map transforms ~f:(fun i -> Util.value_exn @@ Array_list.get cache i)
+    List.map frontier ~f:(fun i -> Util.value_exn @@ Array_list.get cache i)
   in
   List.map refactorings ~f:(fun refactoring ->
-      Util.fold1 ( +. )
+      Util.fold1 ~f:( +. )
       @@ List.map beams ~f:(fun beam ->
              Float.min (arg_cost beam refactoring) (func_cost beam refactoring) ) )
 
-let beams_and_costs ~cost_tbl ~beam_size refactorings transforms =
-  let costs = beam_costs ~cost_tbl ~beam_size refactorings transforms in
+let beams_and_costs ~cost_tbl ~beam_size refactorings frontier =
+  let costs = beam_costs ~cost_tbl ~beam_size refactorings frontier in
   List.zip_exn costs refactorings
   |> List.sort ~compare:(fun (s_1, _) (s_2, _) -> Float.compare s_1 s_2)

@@ -11,13 +11,13 @@ let compression_verbosity = ref 0
 let collect_data = ref false
 
 let dsl_induction_score ~primitive_size_penalty ~dsl_size_penalty request
-    transforms dsl =
+    frontier dsl =
   let log_prob =
-    let base_factor = log (1. /. (Float.of_int @@ List.length transforms)) in
-    Util.fold1 ( +. )
+    let base_factor = log (1. /. (Float.of_int @@ List.length frontier)) in
+    Util.fold1 ~f:( +. )
     @@ List.map ~f:(fun fact ->
            base_factor +. likelihood_of_factorization dsl fact )
-    @@ List.map transforms ~f:(factorize dsl request)
+    @@ List.map frontier ~f:(factorize dsl request)
   in
   let production_size = function
     | Primitive _ ->
@@ -170,17 +170,17 @@ let nontrivial e =
   !primitives > 1 || (!primitives = 1 && !duplicated_indices > 0)
 
 let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
-    ?(n_beta_inversions = 3) ~beam_size ~top_i request dsl transforms =
+    ?(n_beta_inversions = 3) ~beam_size ~top_i request dsl frontier =
   let score =
     dsl_induction_score ~primitive_size_penalty ~dsl_size_penalty request
   in
   let tbl = new_version_tbl () in
   let cost_tbl = empty_cost_tbl tbl in
-  let transform_versions =
+  let version_space_frontier =
     Util.time_it
       (Format.sprintf "calculated %d-step beta inversions.. \n"
          n_beta_inversions ) (fun () ->
-        List.map transforms ~f:(fun p ->
+        List.map frontier ~f:(fun p ->
             if !compression_verbosity >= 3 then
               Format.eprintf "%d-step inversion.. %s\n" n_beta_inversions
                 (string_of_program p) ;
@@ -189,7 +189,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
   in
   let refactorings =
     Util.time_it "proposed refactorings.." (fun () ->
-        reachable_versions tbl transform_versions
+        reachable_versions tbl version_space_frontier
         |> List.concat_map ~f:(fun i ->
                List.dedup_and_sort ~compare:( - )
                @@ snd
@@ -209,23 +209,24 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
   | _ ->
       let ranked_refactorings =
         Util.time_it "beamed version space" (fun () ->
-            beams_and_costs ~cost_tbl ~beam_size refactorings transform_versions
+            beams_and_costs ~cost_tbl ~beam_size refactorings
+              version_space_frontier
             |> Fn.flip List.take top_i )
       in
       Util.flush_all () ;
-      let initial_score = score transforms dsl in
-      let[@warning "-27"] best_score, dsl', transforms', best_i =
+      let initial_score = score frontier dsl in
+      let[@warning "-27"] best_score, dsl', frontier', best_i =
         Util.time_it (Printf.sprintf "Evaluated top %d refactorings" top_i)
           (fun () ->
-            Util.minimum_by ~compare:Float.compare ~f:(fun (s, _, _, _) -> -.s)
+            Util.minimum ~compare:Float.compare ~key:(fun (s, _, _, _) -> -.s)
             @@ List.mapi ranked_refactorings ~f:(fun k (cost, i) ->
                    Gc.compact () ;
-                   let invention_body = Util.singleton_list @@ extract tbl i in
+                   let invention_body = extract_frontier_program tbl i in
                    let new_primitive = normalize_invention invention_body in
                    if !compression_verbosity >= 3 then
                      Format.eprintf "Normalized invention: %s\n"
                      @@ string_of_program new_primitive ;
-                   let score, dsl', transforms' =
+                   let score, dsl', frontier' =
                      try
                        let primitives = primitives_of_dsl dsl in
                        if List.mem ~equal:equal_program primitives new_primitive
@@ -236,8 +237,8 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                            (new_primitive :: primitives)
                        in
                        let new_cost_tbl = empty_cheap_cost_tbl tbl in
-                       let transforms' =
-                         List.zip_exn transform_versions transforms
+                       let frontier' =
+                         List.zip_exn version_space_frontier frontier
                          |> List.mapi ~f:(fun l (j, p) ->
                                 if !compression_verbosity >= 3 then
                                   Format.eprintf "rewriting program.. %s\n"
@@ -252,15 +253,15 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                                     @@ Format.sprintf
                                          "could not find minimal inhabitant of \
                                           %s\n"
-                                    @@ string_of_program @@ Util.singleton_list
-                                    @@ extract tbl j
+                                    @@ string_of_program
+                                    @@ extract_frontier_program tbl j
                                 in
                                 try rewriter request p'
                                 with EtaExpandFailure -> p )
                        in
-                       (score transforms' dsl', dsl', transforms')
+                       (score frontier' dsl', dsl', frontier')
                      with UnificationFailure | DuplicatePrimitive ->
-                       (Float.neg_infinity, dsl, transforms)
+                       (Float.neg_infinity, dsl, frontier)
                    in
                    if !compression_verbosity >= 2 then (
                      Printf.eprintf
@@ -271,7 +272,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                        (string_of_dc_type @@ closed_inference new_primitive)
                        cost score ;
                      Util.flush_all () ) ;
-                   (score, dsl', transforms', i) ) )
+                   (score, dsl', frontier', i) ) )
       in
       let new_primitive = List.hd_exn @@ primitives_of_dsl dsl' in
       Printf.eprintf
@@ -282,11 +283,11 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
         (string_of_program new_primitive)
         (string_of_dc_type @@ canonical_type @@ closed_inference new_primitive) ;
       Util.flush_all () ;
-      Some (dsl', transforms')
+      Some (dsl', frontier')
 
 let export_compression_checkpoint ~n_cores ~dsl_size_penalty
     ~primitive_size_penalty ?(n_beta_inversions = 3) ~beam_size ~top_i dsl
-    transforms =
+    frontier =
   let ts = Time.to_filename_string ~zone:Time.Zone.utc @@ Time.now () in
   let filename = Printf.sprintf "compression_messages/%s" ts in
   let j : Yojson.Safe.t =
@@ -299,27 +300,35 @@ let export_compression_checkpoint ~n_cores ~dsl_size_penalty
       ; ("verbose", `Bool true)
       ; ("CPUs", `Int n_cores)
       ; ("primitive_size_penalty", `Float primitive_size_penalty)
-      ; ( "transforms"
-        , `List (List.map transforms ~f:(fun p -> `String (string_of_program p)))
+      ; ( "frontier"
+        , `List (List.map frontier ~f:(fun p -> `String (string_of_program p)))
         ) ]
   in
   Yojson.Safe.to_file filename j ;
   Printf.eprintf "Exported compression checkpoint to %s\n" filename
 
 let compress ?(n_cores = 1) ~dsl_size_penalty ~inlining ~primitive_size_penalty
-    ?(n_beta_inversions = 3) ~beam_size ~top_i ~iterations request dsl
-    transforms =
+    ?(n_beta_inversions = 3) ~beam_size ~top_i ~iterations request dsl frontier
+    =
   let find_new_primitive dsl dsl' =
-    Util.singleton_list
-    @@ List.filter
-         ~f:
-           (Fn.compose not
-              (List.mem ~equal:equal_program (primitives_of_dsl dsl)) )
-    @@ primitives_of_dsl dsl'
+    match
+      List.filter
+        ~f:
+          (Fn.compose not
+             (List.mem ~equal:equal_program (primitives_of_dsl dsl)) )
+      @@ primitives_of_dsl dsl'
+    with
+    | [np] ->
+        np
+    | [] ->
+        failwith "no new primitive after successful compression"
+    | _ ->
+        failwith
+          "multiple new primitives after single round of successful compression"
   in
-  let illustrate_new_primitive prim transforms =
+  let illustrate_new_primitive prim frontier =
     let illustrations =
-      List.filter_map transforms ~f:(fun p ->
+      List.filter_map frontier ~f:(fun p ->
           if List.mem ~equal:equal_program (subexpressions p) prim then Some p
           else None )
     in
@@ -336,7 +345,7 @@ let compress ?(n_cores = 1) ~dsl_size_penalty ~inlining ~primitive_size_penalty
       match
         Util.time_it "Completed one step of memory consolidation" (fun () ->
             compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
-              ~n_beta_inversions ~beam_size ~top_i request dsl transforms )
+              ~n_beta_inversions ~beam_size ~top_i request dsl frontier )
       with
       | None ->
           (dsl, frontiers)
@@ -351,4 +360,4 @@ let compress ?(n_cores = 1) ~dsl_size_penalty ~inlining ~primitive_size_penalty
           go ~iterations:(iterations - 1) dsl' frontiers'
   in
   Util.time_it "completed ocaml compression" (fun () ->
-      go ~iterations dsl transforms )
+      go ~iterations dsl frontier )
