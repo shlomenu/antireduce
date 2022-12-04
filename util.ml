@@ -9,20 +9,17 @@ let rec unzip3 ?(unzipped = ([], [], [])) = function
 
 let value_exn x = Option.value_exn x
 
-let singleton_list = function [x] -> x | _ -> assert false
+let fold1 ~f l = List.fold_right ~init:(List.hd_exn l) ~f (List.tl_exn l)
 
-(* vector operations *)
-
-let fold1 f l = List.fold_right ~init:(List.hd_exn l) ~f (List.tl_exn l)
-
-let minimum_by l ~compare ~f =
-  List.reduce_exn l ~f:(fun x y -> if compare (f x) (f y) <= 0 then x else y)
+let minimum l ~compare ~key =
+  List.map l ~f:(fun x -> (key x, x))
+  |> List.reduce_exn ~f:(fun key_x key_y ->
+         if compare (fst key_x) (fst key_y) <= 0 then key_x else key_y )
+  |> snd
 
 let is_valid x = (not (Float.is_nan x)) && Float.is_finite x
 
 let is_invalid = Fn.compose not is_valid
-
-let range = List.range 0
 
 let flush_all () = Out_channel.flush stdout ; Out_channel.flush stderr
 

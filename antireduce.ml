@@ -1,3 +1,12 @@
+module Type = Type
+module Program = Program
+module Dsl = Dsl
+module Parser = Parser
+module Versions = Versions
+module Compression = Compression
+module Util = Util
+module S = Yojson.Safe
+module SU = Yojson.Safe.Util
 open Core
 open Type
 open Program
@@ -118,3 +127,70 @@ let commands_to_program req dsl search_points =
   enumerate_terminal dsl empty_type_context req search_points
   |> Option.value_map ~default:None ~f:(fun (p, _, prim_indices') ->
          Some (program_of_partial p, List.length prim_indices') )
+
+type frontier_entry = {name: string; program: program}
+
+type 'a prededup_frontier_entry =
+  {output: 'a; program_size: int; filename: string; path: string}
+
+let verbose_duplicates m convert priority l =
+  List.fold l ~init:(Hashtbl.create m) ~f:(fun tbl c ->
+      Hashtbl.update tbl (convert c) ~f:(function
+        | None ->
+            [c]
+        | Some cs ->
+            List.sort (c :: cs) ~compare:priority ) ;
+      tbl )
+  |> Hashtbl.fold ~init:([], []) ~f:(fun ~key:_ ~data (redundant, best) ->
+         (List.drop data 1 :: redundant, List.hd_exn data :: best) )
+
+let load_frontier_from parse dir frontier =
+  Array.filter_map frontier ~f:(fun filename ->
+      let path = Filename.concat dir filename in
+      let j = S.from_file path in
+      Some (parse @@ SU.to_string @@ SU.member "original" j, path, j) )
+  |> Array.to_list |> Util.unzip3
+
+let overwrite_frontier programs' paths frontier =
+  List.zip_exn programs' frontier
+  |> List.map ~f:(fun (p', ent) ->
+         Util.Yojson_util.sub "program" (yojson_of_program p') ent
+         |> Util.Yojson_util.sub "program_str" (`String (string_of_program p')) )
+  |> List.zip_exn paths
+  |> List.iter ~f:(fun (path, ent') ->
+         Caml.Sys.remove path ; S.to_file path ent' )
+
+let commands_to_entry ~(default_program : program)
+    ~(default_output : unit -> 'b) ~(evaluate : program -> 'a option)
+    ~(postprocess_output : 'a -> 'b) ~(yojson_of_output : 'b -> S.t)
+    ~(request : dc_type) ~dsl cmds =
+  let translated, timed_out, p, n_unused, output =
+    match commands_to_program request dsl cmds with
+    | Some (p, n_unused) ->
+        Out_channel.flush stderr ;
+        let timed_out, output =
+          match evaluate p with
+          | Some output ->
+              (false, postprocess_output output)
+          | None ->
+              (true, default_output ())
+        in
+        (true, timed_out, p, n_unused, output)
+    | None ->
+        (false, false, default_program, List.length cmds, default_output ())
+  in
+  `Assoc
+    [ ("n_unused", `Int n_unused)
+    ; ("translated", `Bool translated)
+    ; ("timed_out", `Bool timed_out)
+    ; ("beta_reduced", `String (string_of_program @@ beta_normal_form p))
+    ; ("original", `String (string_of_program p))
+    ; ("output", yojson_of_output output) ]
+
+let execute_and_save ~(timeout : float) ~(attempts : int) ~dsl ~default_program
+    ~default_output ~evaluate ~postprocess_output ~yojson_of_output ~request j =
+  SU.member "commands" j |> SU.to_list |> List.map ~f:SU.to_int
+  |> commands_to_entry ~default_program ~default_output
+       ~evaluate:(evaluate ~timeout ~attempts)
+       ~postprocess_output ~yojson_of_output ~request ~dsl
+  |> S.to_channel Out_channel.stdout

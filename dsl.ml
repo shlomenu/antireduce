@@ -122,7 +122,7 @@ let unifying_indices env req cxt =
   in
   if List.is_empty terminal_indices then unified
   else
-    let min_terminal_index = Util.fold1 min terminal_indices in
+    let min_terminal_index = Util.fold1 ~f:min terminal_indices in
     let f ent =
       not
         ( is_index ent.expr
