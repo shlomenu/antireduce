@@ -151,14 +151,26 @@ let load_frontier_from parse dir frontier =
       Some (parse @@ SU.to_string @@ SU.member "original" j, path, j) )
   |> Array.to_list |> Util.unzip3
 
-let overwrite_frontier programs' paths frontier =
-  List.zip_exn programs' frontier
-  |> List.map ~f:(fun (p', ent) ->
-         Util.Yojson_util.sub "program" (yojson_of_program p') ent
-         |> Util.Yojson_util.sub "program_str" (`String (string_of_program p')) )
+let overwrite_frontier programs' paths file_contents =
+  List.zip_exn programs' file_contents
   |> List.zip_exn paths
-  |> List.iter ~f:(fun (path, ent') ->
-         Caml.Sys.remove path ; S.to_file path ent' )
+  |> List.fold_right
+       ~init:(Set.empty (module String), [])
+       ~f:(fun (path, (program', file_content)) (s, l) ->
+         if not (Set.mem s @@ path) then
+           (Set.add s @@ path, (path, program', file_content) :: l)
+         else (s, l) )
+  |> snd
+  |> List.map ~f:(fun (path, program', file_content) ->
+         ( path
+         , Util.Yojson_util.sub "original"
+             (`String (string_of_program program'))
+             file_content
+           |> Util.Yojson_util.sub "beta_reduced"
+                (`String (string_of_program @@ beta_normal_form program')) ) )
+  |> List.iter ~f:(fun (path, file_content') ->
+         Caml.Sys.remove path ;
+         S.to_file path file_content' )
 
 let commands_to_entry ~(default_program : program)
     ~(default_output : unit -> 'b) ~(evaluate : program -> 'a option)
