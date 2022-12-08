@@ -175,7 +175,7 @@ let overwrite_frontier programs' paths file_contents =
 let commands_to_entry ~(default_program : program)
     ~(default_output : unit -> 'b) ~(evaluate : program -> 'a option)
     ~(postprocess_output : 'a -> 'b) ~(yojson_of_output : 'b -> S.t)
-    ~(request : dc_type) ~dsl cmds =
+    ~(yojson_key_of_output : 'b -> S.t) ~(request : dc_type) ~dsl cmds =
   let translated, timed_out, p, n_unused, output =
     match commands_to_program request dsl cmds with
     | Some (p, n_unused) ->
@@ -197,12 +197,14 @@ let commands_to_entry ~(default_program : program)
     ; ("timed_out", `Bool timed_out)
     ; ("beta_reduced", `String (string_of_program @@ beta_normal_form p))
     ; ("original", `String (string_of_program p))
-    ; ("output", yojson_of_output output) ]
+    ; ("output", yojson_of_output output)
+    ; ("output_key", yojson_key_of_output output) ]
 
 let execute_and_save ~(timeout : float) ~(attempts : int) ~dsl ~default_program
-    ~default_output ~evaluate ~postprocess_output ~yojson_of_output ~request j =
+    ~default_output ~evaluate ~postprocess_output ~yojson_of_output
+    ~yojson_key_of_output ~request j =
   SU.member "commands" j |> SU.to_list |> List.map ~f:SU.to_int
   |> commands_to_entry ~default_program ~default_output
        ~evaluate:(evaluate ~timeout ~attempts)
-       ~postprocess_output ~yojson_of_output ~request ~dsl
+       ~postprocess_output ~yojson_of_output ~yojson_key_of_output ~request ~dsl
   |> S.to_channel Out_channel.stdout

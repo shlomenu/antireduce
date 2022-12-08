@@ -124,7 +124,7 @@ let rec run_for_interval ?(attempts = 1) dt f =
         run_for_interval ~attempts:(attempts - 1) dt f
 
 module IntPair = struct
-  type t = int * int [@@deriving equal, compare, sexp_of, hash]
+  type t = int * int [@@deriving equal, compare, sexp_of, hash, yojson]
 end
 
 module OrdIntPair = struct
