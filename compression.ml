@@ -216,15 +216,12 @@ let rewrite_programs cost_tbl version_tbl req s_inv inv (s_p, p) =
   try refactor inv req p' with EtaExpandFailure -> p
 
 let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
-    ~n_beta_inversions ~beam_size ~top_i ~request ~dsl ~all_programs ~frontier =
+    ~n_beta_inversions ~beam_size ~top_i ~request ~dsl ~frontier =
   let score =
     dsl_induction_score ~primitive_size_penalty ~dsl_size_penalty request
   in
   let tbl = new_version_tbl () in
   let cost_tbl = empty_cost_tbl tbl in
-  let all_spaces =
-    incorporate_programs ~n_beta_inversions ~inlining tbl all_programs
-  in
   let frontier_spaces =
     incorporate_programs ~n_beta_inversions ~inlining tbl frontier
   in
@@ -289,18 +286,10 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
       (string_of_program best_primitive)
       (string_of_dc_type @@ canonical_type @@ closed_inference best_primitive) ;
     Util.flush_all () ;
-    let cheap_cost_tbl = empty_cheap_cost_tbl tbl in
-    let all_programs' =
-      List.zip_exn all_spaces all_programs
-      |> List.map
-           ~f:
-             (rewrite_programs cheap_cost_tbl tbl request best_invention_space
-                best_invention )
-    in
-    Some (dsl', all_programs', frontier')
+    Some (dsl', frontier')
 
 let export_compression_checkpoint ~dsl_size_penalty ~primitive_size_penalty
-    ~n_beta_inversions ~beam_size ~top_i ~dsl ~all_programs ~frontier =
+    ~n_beta_inversions ~beam_size ~top_i ~dsl ~frontier =
   let ts = Time.to_filename_string ~zone:Time.Zone.utc @@ Time.now () in
   let filename = Printf.sprintf "compression_messages/%s" ts in
   let j : Yojson.Safe.t =
@@ -312,10 +301,6 @@ let export_compression_checkpoint ~dsl_size_penalty ~primitive_size_penalty
       ; ("dsl_size_penalty", `Float dsl_size_penalty)
       ; ("verbose", `Bool true)
       ; ("primitive_size_penalty", `Float primitive_size_penalty)
-      ; ( "all_programs"
-        , `List
-            (List.map all_programs ~f:(fun p -> `String (string_of_program p)))
-        )
       ; ( "frontier"
         , `List (List.map frontier ~f:(fun p -> `String (string_of_program p)))
         ) ]
@@ -352,31 +337,29 @@ let find_new_primitive dsl dsl' =
         "multiple new primitives after single successful compression iteration"
 
 let compress ~dsl_size_penalty ~inlining ~primitive_size_penalty
-    ~n_beta_inversions ~beam_size ~top_i ~iterations ~request ~dsl ~all_programs
-    ~frontier =
-  let rec go ~iterations dsl all_programs frontier =
+    ~n_beta_inversions ~beam_size ~top_i ~iterations ~request ~dsl ~frontier =
+  let rec go ~iterations dsl frontier =
     if iterations > 0 then (
       match
         Util.time_it "Completed one step of memory consolidation" (fun () ->
             compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
-              ~n_beta_inversions ~beam_size ~top_i ~request ~dsl ~all_programs
-              ~frontier )
+              ~n_beta_inversions ~beam_size ~top_i ~request ~dsl ~frontier )
       with
       | None ->
-          (dsl, all_programs, frontier)
-      | Some (dsl', all_programs', frontier') ->
+          (dsl, frontier)
+      | Some (dsl', frontier') ->
           if !compression_verbosity >= 1 then
             illustrate_primitive_usage (find_new_primitive dsl dsl') frontier' ;
           if !compression_verbosity >= 4 && iterations > 1 then
             export_compression_checkpoint ~dsl_size_penalty
               ~primitive_size_penalty ~n_beta_inversions ~beam_size ~top_i
-              ~dsl:dsl' ~all_programs:all_programs' ~frontier:frontier' ;
+              ~dsl:dsl' ~frontier:frontier' ;
           Util.flush_all () ;
-          go ~iterations:(iterations - 1) dsl' all_programs' frontier' )
-    else (dsl, all_programs, frontier)
+          go ~iterations:(iterations - 1) dsl' frontier' )
+    else (dsl, frontier)
   in
-  let dsl', all_programs', _ =
+  let dsl', frontier' =
     Util.time_it "completed ocaml compression" (fun () ->
-        go ~iterations dsl all_programs frontier )
+        go ~iterations dsl frontier )
   in
-  (dsl', all_programs')
+  (dsl', frontier')
