@@ -161,7 +161,7 @@ let rec extract tbl i =
     frontier programs.  If extracting a program for a version space known
     to represent a frontier program (or part of one), extract should return
     exactly one program. *)
-let extract_frontier_program tbl i =
+let extract_program tbl i =
   match extract tbl i with
   | [p] ->
       p
@@ -778,13 +778,13 @@ let rec minimal_inhabitant ?(memo = None) ?(given = None)
       match (c, given) with
       | 1., Some invention when intersecting ~memo cost_tbl.parent invention i
         ->
-          extract_frontier_program cost_tbl.parent invention
+          extract_program cost_tbl.parent invention
       | _ -> (
         match version_of_int cost_tbl.parent i with
         | Universe | Void ->
             failwith "minimal_inhabitant"
         | IndexSpace _ | TerminalSpace _ ->
-            extract_frontier_program cost_tbl.parent i
+            extract_program cost_tbl.parent i
         | Union u ->
             Util.value_exn
             @@ minimal_inhabitant ~memo ~given ~can_be_lambda cost_tbl
@@ -839,21 +839,21 @@ let arg_cost b i =
   Hashtbl.find b.refactored_arg_cost i
   |> Option.value_map ~f:Fn.id ~default:b.unrefactored_arg_cost
 
-let refactorings_costs tbl refactorings =
+let inventions_costs tbl inventions =
   let costs = Hashtbl.create (module Int) in
-  List.iter refactorings ~f:(fun refactoring ->
+  List.iter inventions ~f:(fun invention ->
       let cost =
         Float.of_int @@ List.length
         @@ List.dedup_and_sort ~compare:( - )
         @@ free_variables
-        @@ extract_frontier_program tbl refactoring
+        @@ extract_program tbl invention
       in
-      Hashtbl.set costs ~key:refactoring ~data:(1. +. cost) ) ;
+      Hashtbl.set costs ~key:invention ~data:(1. +. cost) ) ;
   costs
 
-let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings frontier =
-  let costs = refactorings_costs cost_tbl.parent refactorings in
-  let refactorings = Hash_set.Poly.of_list refactorings in
+let beams ~(cost_tbl : cost_tbl) ~beam_size inventions frontier =
+  let costs = inventions_costs cost_tbl.parent inventions in
+  let inventions = Hash_set.Poly.of_list inventions in
   let cache = Array_list.create () in
   let rec go i =
     Array_list.ensure_length cache (i + 1) None ;
@@ -873,11 +873,11 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings frontier =
           ; refactored_func_cost= Hashtbl.create (module Int)
           ; refactored_arg_cost= Hashtbl.create (module Int) }
         in
-        List.filter inhabitants ~f:(Hash_set.mem refactorings)
-        |> List.iter ~f:(fun refactoring ->
-               let cost = Hashtbl.find_exn costs refactoring in
-               Hashtbl.set beam.refactored_func_cost ~key:refactoring ~data:cost ;
-               Hashtbl.set beam.refactored_arg_cost ~key:refactoring ~data:cost ) ;
+        List.filter inhabitants ~f:(Hash_set.mem inventions)
+        |> List.iter ~f:(fun invention ->
+               let cost = Hashtbl.find_exn costs invention in
+               Hashtbl.set beam.refactored_func_cost ~key:invention ~data:cost ;
+               Hashtbl.set beam.refactored_arg_cost ~key:invention ~data:cost ) ;
         ( match version_of_int cost_tbl.parent i with
         | AbstractionSpace b ->
             let child = go b in
@@ -890,14 +890,13 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings frontier =
               Hashtbl.keys beam_f.refactored_func_cost
               @ Hashtbl.keys beam_x.refactored_arg_cost
             in
-            List.iter refactored_with ~f:(fun refactoring ->
+            List.iter refactored_with ~f:(fun invention ->
                 let c =
-                  epsilon_cost
-                  +. func_cost beam_f refactoring
-                  +. arg_cost beam_x refactoring
+                  epsilon_cost +. func_cost beam_f invention
+                  +. arg_cost beam_x invention
                 in
-                relax beam.refactored_func_cost ~key:refactoring ~data:c ;
-                relax beam.refactored_arg_cost ~key:refactoring ~data:c )
+                relax beam.refactored_func_cost ~key:invention ~data:c ;
+                relax beam.refactored_arg_cost ~key:invention ~data:c )
         | Union u ->
             List.iter u ~f:(fun v ->
                 let child = go v in
@@ -914,17 +913,17 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size refactorings frontier =
   List.iter frontier ~f:(fun i -> ignore (go i : beam)) ;
   cache
 
-let beam_costs ~cost_tbl ~beam_size refactorings frontier =
-  let cache = beams ~cost_tbl ~beam_size refactorings frontier in
+let beam_costs ~cost_tbl ~beam_size inventions frontier =
+  let cache = beams ~cost_tbl ~beam_size inventions frontier in
   let beams =
     List.map frontier ~f:(fun i -> Util.value_exn @@ Array_list.get cache i)
   in
-  List.map refactorings ~f:(fun refactoring ->
+  List.map inventions ~f:(fun invention ->
       Util.fold1 ~f:( +. )
       @@ List.map beams ~f:(fun beam ->
-             Float.min (arg_cost beam refactoring) (func_cost beam refactoring) ) )
+             Float.min (arg_cost beam invention) (func_cost beam invention) ) )
 
-let beams_and_costs ~cost_tbl ~beam_size refactorings frontier =
-  let costs = beam_costs ~cost_tbl ~beam_size refactorings frontier in
-  List.zip_exn costs refactorings
+let beams_and_costs ~cost_tbl ~beam_size ~inventions frontier =
+  let costs = beam_costs ~cost_tbl ~beam_size inventions frontier in
+  List.zip_exn costs inventions
   |> List.sort ~compare:(fun (s_1, _) (s_2, _) -> Float.compare s_1 s_2)
