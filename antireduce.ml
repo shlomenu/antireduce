@@ -105,15 +105,16 @@ and enumerate_parameters dsl cxt parameters f size =
   match parameters with
   | [] ->
       Some (f, cxt, size)
-  | last :: [] when equal_dc_type last dsl.state_type ->
-      Some (PApply (f, PIndex 0), cxt, size - 1)
-  | x_1_ty :: rest ->
+  | x_ty :: rest ->
       if parameters_length dsl parameters > size then None
       else
-        let cxt, x_1_ty = apply_context cxt x_1_ty in
-        enumerate_terminal dsl cxt x_1_ty size
-        |> Option.value_map ~default:None ~f:(fun (x_1, cxt', size') ->
-               enumerate_parameters dsl cxt' rest (PApply (f, x_1)) size' )
+        let cxt, x_ty = apply_context cxt x_ty in
+        if equal_dc_type x_ty dsl.state_type && List.is_empty rest then
+          Some (PApply (f, PIndex 0), cxt, size - 1)
+        else
+          enumerate_terminal dsl cxt x_ty size
+          |> Option.value_map ~default:None ~f:(fun (x, cxt', size') ->
+                 enumerate_parameters dsl cxt' rest (PApply (f, x)) size' )
 
 let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
     ~representations_dir ~size ~evaluate ~nontrivial ~saveable_output ~parse
