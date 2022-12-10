@@ -74,14 +74,14 @@ let rec parameters_length_aux dsl len = function
 
 let parameters_length dsl = parameters_length_aux dsl 0
 
-let rec enumerate_terminal dsl env cxt req size =
+let rec enumerate_terminal ~max_size dsl env cxt req size =
   match req with
   | Arrow {left; right; _} ->
-      enumerate_terminal dsl (left :: env) cxt right size
-      |> Option.value_map ~default:None ~f:(fun (b, cxt', prims') ->
-             Some (PAbstraction b, cxt', prims') )
+      enumerate_terminal ~max_size dsl (left :: env) cxt right size
+      |> Option.value_map ~default:None ~f:(fun (b, cxt', size') ->
+             Some (PAbstraction b, cxt', size') )
   | _ ->
-      if size > 0 then
+      if size < max_size then
         let rec go remaining_unified =
           let i = Random.int @@ List.length remaining_unified in
           let selected = List.nth_exn remaining_unified i in
@@ -89,9 +89,10 @@ let rec enumerate_terminal dsl env cxt req size =
             List.filteri remaining_unified ~f:(fun j _ -> j <> i)
           in
           match
-            enumerate_parameters dsl env selected.context selected.parameters
+            enumerate_parameters ~max_size dsl env selected.context
+              selected.parameters
               (partial_of_program selected.expr)
-              (size - 1)
+              (size + 1)
           with
           | Some _ as r ->
               r
@@ -101,17 +102,19 @@ let rec enumerate_terminal dsl env cxt req size =
         go @@ unifying_expressions dsl env req cxt
       else None
 
-and enumerate_parameters dsl env cxt parameters f size =
+and enumerate_parameters ~max_size dsl env cxt parameters f size =
   match parameters with
   | [] ->
       Some (f, cxt, size)
   | x_ty :: rest ->
-      if parameters_length dsl parameters > size then None
+      if parameters_length dsl parameters > max_size - size then None
       else
         let cxt, x_ty = apply_context cxt x_ty in
-        enumerate_terminal dsl env cxt x_ty size
+        enumerate_terminal ~max_size dsl env cxt x_ty size
         |> Option.value_map ~default:None ~f:(fun (x, cxt', size') ->
-               enumerate_parameters dsl env cxt' rest (PApply (f, x)) size' )
+               enumerate_parameters ~max_size dsl env cxt' rest
+                 (PApply (f, x))
+                 size' )
 
 let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
     ~representations_dir ~size ~evaluate ~nontrivial ~saveable_output ~parse
@@ -142,7 +145,7 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
     let program_and_output =
       let open Option.Let_syntax in
       let%bind p, _, _ =
-        enumerate_terminal dsl [] empty_type_context request size
+        enumerate_terminal ~max_size:size dsl [] empty_type_context request 0
       in
       let p = program_of_partial p in
       let%bind o = evaluate ~timeout:eval_timeout ~attempts p in
