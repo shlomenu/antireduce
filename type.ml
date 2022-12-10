@@ -36,7 +36,7 @@ let kind name parameters =
   Constructor {name; parameters; polymorphic}
 
 type type_context =
-  {next_id: int; types: (Int.t, dc_type option, Int.comparator_witness) Map.t}
+  {next_id: int; types: (Int.t, dc_type, Int.comparator_witness) Map.t}
 
 let empty_type_context = {next_id= 0; types= Map.empty (module Int)}
 
@@ -110,9 +110,9 @@ let string_of_dc_type : dc_type -> string =
   in
   go false
 
-let make_type_id {next_id; types} =
-  ( Id next_id
-  , {next_id= next_id + 1; types= Map.add_exn types ~key:next_id ~data:None} )
+let make_type_id ({next_id; types} as cxt) =
+  assert (Option.is_none @@ Map.find types next_id) ;
+  (Id next_id, {cxt with next_id= next_id + 1})
 
 let rec make_type_ids (n : int) ?(ids = []) (cxt : type_context) :
     dc_type list * type_context =
@@ -122,13 +122,12 @@ let rec make_type_ids (n : int) ?(ids = []) (cxt : type_context) :
     let ids = ty :: ids in
     make_type_ids (n - 1) ~ids cxt
 
-let bind_type_id_to_option i ty_opt cxt : type_context =
-  {cxt with types= Map.set cxt.types ~key:i ~data:ty_opt}
+let bind_type_id i ty cxt : type_context =
+  {cxt with types= Map.set cxt.types ~key:i ~data:ty}
 
-let bind_type_id i ty : type_context -> type_context =
-  bind_type_id_to_option i (Some ty)
-
-let lookup_type_id cxt = Map.find_exn cxt.types
+let lookup_type_id cxt i =
+  assert (i < cxt.next_id) ;
+  Map.find cxt.types i
 
 let rec apply_context cxt = function
   | ty when not (is_polymorphic ty) ->
@@ -159,7 +158,7 @@ let compose_substitutions cxt_a cxt_b =
   let next_id = max cxt_a.next_id cxt_b.next_id in
   let types =
     List.range ~start:`inclusive ~stop:`exclusive 0 (next_id - 1)
-    |> List.map ~f:(fun i ->
+    |> List.filter_map ~f:(fun i ->
            let ty = Id i in
            let ty =
              if i < cxt_a.next_id then snd @@ apply_context cxt_a ty else ty
@@ -167,7 +166,7 @@ let compose_substitutions cxt_a cxt_b =
            let ty =
              if i < cxt_b.next_id then snd @@ apply_context cxt_b ty else ty
            in
-           if equal_dc_type ty (Id i) then (i, None) else (i, Some ty) )
+           if equal_dc_type ty (Id i) then None else Some (i, ty) )
     |> Map.of_alist_exn (module Int)
   in
   {next_id; types}
@@ -324,11 +323,9 @@ let ground name = Constructor {name; parameters= []; polymorphic= false}
 let unify_many_types tys =
   let ty, cxt = make_type_id empty_type_context in
   let cxt_ref = ref cxt in
-  let f ty' =
-    let cxt', ty' = instantiate_type !cxt_ref ty' in
-    cxt_ref := unify cxt' ty' ty
-  in
-  List.iter tys ~f ;
+  List.iter tys ~f:(fun ty' ->
+      let cxt', ty' = instantiate_type !cxt_ref ty' in
+      cxt_ref := unify cxt' ty' ty ) ;
   snd @@ apply_context !cxt_ref ty
 
 type fast_cons_signature =
@@ -367,37 +364,33 @@ let fast_of_slow ty =
   let rec go = function
     | Id i ->
         FId (Array.get types i)
-    | Arrow arw as ty ->
-        let left = go arw.left in
-        let right = go arw.right in
-        let polymorphic = if arw.polymorphic then None else Some ty in
-        FArrow {left; right; polymorphic}
-    | Constructor con as ty ->
-        let name = con.name in
-        let parameters = List.map con.parameters ~f:go in
-        let polymorphic = if con.polymorphic then None else Some ty in
-        FConstructor {name; parameters; polymorphic}
+    | Arrow a as ty ->
+        FArrow
+          { left= go a.left
+          ; right= go a.right
+          ; polymorphic= (if a.polymorphic then None else Some ty) }
+    | Constructor c as ty ->
+        FConstructor
+          { name= c.name
+          ; parameters= List.map c.parameters ~f:go
+          ; polymorphic= (if c.polymorphic then None else Some ty) }
   in
   (go ty, types)
 
 let rec slow_of_fast next_id_ref = function
-  | FArrow arw ->
-      let left = slow_of_fast next_id_ref arw.left in
-      let right = slow_of_fast next_id_ref arw.right in
-      arrow left right
+  | FArrow a ->
+      arrow (slow_of_fast next_id_ref a.left) (slow_of_fast next_id_ref a.right)
   | FConstructor con ->
-      let parameters =
-        let f = slow_of_fast next_id_ref in
-        List.map con.parameters ~f
-      in
-      kind con.name parameters
-  | FId ty_opt_ref ->
-      Option.value_map !ty_opt_ref ~f:Fn.id
-        ~default:
-          (let ty = Id !next_id_ref in
-           incr next_id_ref ;
-           ty_opt_ref := Some ty ;
-           ty )
+      kind con.name @@ List.map con.parameters ~f:(slow_of_fast next_id_ref)
+  | FId ({contents= ty_opt} as ty_opt_ref) -> (
+    match ty_opt with
+    | Some ty ->
+        ty
+    | None ->
+        let ty = Id !next_id_ref in
+        incr next_id_ref ;
+        ty_opt_ref := Some ty ;
+        ty )
 
 let rec fast_unify cxt fast_ty ty =
   match (fast_ty, ty) with
@@ -408,32 +401,29 @@ let rec fast_unify cxt fast_ty ty =
     | None ->
         ty_opt_ref := Some ty ;
         cxt )
-  | FArrow f_arw, Arrow arw ->
-      let cxt = fast_unify cxt f_arw.left arw.left in
-      fast_unify cxt f_arw.right arw.right
-  | FConstructor fast_con, Constructor con ->
-      if String.(fast_con.name = con.name) then
-        List.fold2_exn fast_con.parameters con.parameters ~init:cxt
-          ~f:fast_unify
+  | FArrow f_a, Arrow a ->
+      let cxt = fast_unify cxt f_a.left a.left in
+      fast_unify cxt f_a.right a.right
+  | FConstructor f_c, Constructor c ->
+      if String.(f_c.name = c.name) then
+        List.fold2_exn f_c.parameters c.parameters ~init:cxt ~f:fast_unify
       else raise UnificationFailure
   | FArrow {polymorphic= Some ty'; _}, Id i
   | FConstructor {polymorphic= Some ty'; _}, Id i ->
       bind_type_id i ty' cxt
   | FConstructor {parameters= []; polymorphic= None; _}, _ ->
       failwith "fast_unify: parameterless constructor is not monomorphic"
-  | FArrow {left; right; polymorphic= None}, Id i ->
-      let left', cxt = make_type_id cxt in
-      let right', cxt = make_type_id cxt in
-      let arw : arrow_signature =
-        {left= left'; right= right'; polymorphic= true}
-      in
-      let cxt = bind_type_id i (Arrow arw) cxt in
-      let cxt = fast_unify cxt left left' in
-      fast_unify cxt right right'
+  | FArrow {left= f_l; right= f_r; polymorphic= None}, Id i ->
+      let l, cxt = make_type_id cxt in
+      let r, cxt = make_type_id cxt in
+      let a : arrow_signature = {left= l; right= r; polymorphic= true} in
+      let cxt = bind_type_id i (Arrow a) cxt in
+      let cxt = fast_unify cxt f_l l in
+      fast_unify cxt f_r l
   | FConstructor {name; parameters= fast_parameters; polymorphic= None}, Id i ->
       let parameters, cxt = make_type_ids (List.length fast_parameters) cxt in
-      let con : cons_signature = {name; parameters; polymorphic= true} in
-      let cxt = bind_type_id i (Constructor con) cxt in
+      let c : cons_signature = {name; parameters; polymorphic= true} in
+      let cxt = bind_type_id i (Constructor c) cxt in
       List.fold2_exn fast_parameters parameters ~init:cxt ~f:fast_unify
   | FArrow _, Constructor _ | FConstructor _, Arrow _ ->
       raise UnificationFailure
@@ -447,8 +437,7 @@ let make_fast_unifier ty =
     let next_id = cxt.next_id in
     let next_id_ref = ref next_id in
     let parameters =
-      let f = slow_of_fast next_id_ref in
-      List.map parameters_fast_ty ~f
+      List.map parameters_fast_ty ~f:(slow_of_fast next_id_ref)
     in
     let cxt = snd @@ make_type_ids (!next_id_ref - next_id) cxt in
     Array.iter types ~f:(fun ty_opt -> ty_opt := None) ;
