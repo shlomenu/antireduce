@@ -98,21 +98,22 @@ let log_prob_under_dsl dsl = Fn.compose log (prob_under_dsl dsl)
 type unifying_expression =
   {expr: program; parameters: dc_type list; context: type_context}
 
+let unify_env env req cxt =
+  List.filter_mapi env ~f:(fun i ty ->
+      let expr = Index i in
+      let context, ty = apply_context cxt ty in
+      let terminal_ty = terminal_of_type ty in
+      if might_unify terminal_ty req then
+        try
+          let context = unify context terminal_ty req in
+          let context, ty = apply_context context ty in
+          let parameters = parameters_of_type ty in
+          Some {expr; parameters; context}
+        with UnificationFailure -> None
+      else None )
+
 let unifying_indices env req cxt =
-  let unified =
-    List.filter_mapi env ~f:(fun i ty ->
-        let expr = Index i in
-        let context, ty = apply_context cxt ty in
-        let terminal_ty = terminal_of_type ty in
-        if might_unify terminal_ty req then
-          try
-            let context = unify context terminal_ty req in
-            let context, ty = apply_context context ty in
-            let parameters = parameters_of_type ty in
-            Some {expr; parameters; context}
-          with UnificationFailure -> None
-        else None )
-  in
+  let unified = unify_env env req cxt in
   let terminal_indices =
     let f ent =
       if List.is_empty ent.parameters then Some (int_of_index ent.expr)

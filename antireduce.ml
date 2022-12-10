@@ -89,7 +89,7 @@ let rec enumerate_terminal dsl cxt req size =
             List.filteri remaining_unified ~f:(fun j _ -> j <> i)
           in
           match
-            enumerate_parameters dsl cxt selected.parameters
+            enumerate_parameters dsl selected.context selected.parameters
               (partial_of_program selected.expr)
               (size - 1)
           with
