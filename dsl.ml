@@ -98,7 +98,7 @@ let log_prob_under_dsl dsl = Fn.compose log (prob_under_dsl dsl)
 type unifying_expression =
   {expr: program; parameters: dc_type list; context: type_context}
 
-let unify_env env req cxt =
+let unify_environment env req cxt =
   List.filter_mapi env ~f:(fun i ty ->
       let expr = Index i in
       let context, ty = apply_context cxt ty in
@@ -112,25 +112,23 @@ let unify_env env req cxt =
         with UnificationFailure -> None
       else None )
 
-let unifying_indices env req cxt =
-  let unified = unify_env env req cxt in
-  let terminal_indices =
-    let f ent =
-      if List.is_empty ent.parameters then Some (int_of_index ent.expr)
-      else None
+let unifying_indices dsl env req cxt =
+  let unified = unify_environment env req cxt in
+  if equal_dc_type req dsl.state_type then
+    let terminal_indices =
+      List.filter_map unified ~f:(fun ent ->
+          if List.is_empty ent.parameters then Some (int_of_index ent.expr)
+          else None )
     in
-    List.filter_map unified ~f
-  in
-  if List.is_empty terminal_indices then unified
-  else
-    let min_terminal_index = Util.fold1 ~f:min terminal_indices in
-    let f ent =
-      not
-        ( is_index ent.expr
-        && List.is_empty ent.parameters
-        && int_of_index ent.expr <> min_terminal_index )
-    in
-    List.filter unified ~f
+    if List.is_empty terminal_indices then unified
+    else
+      let min_terminal_index = Util.fold1 ~f:min terminal_indices in
+      List.filter unified ~f:(fun ent ->
+          not
+            ( is_index ent.expr
+            && List.is_empty ent.parameters
+            && int_of_index ent.expr <> min_terminal_index ) )
+  else unified
 
 let unifying_primitives dsl req cxt =
   List.filter_map dsl.library ~f:(fun ent ->
@@ -143,7 +141,7 @@ let unifying_primitives dsl req cxt =
       with UnificationFailure -> None )
 
 let unifying_expressions dsl env req cxt =
-  unifying_indices env req cxt @ unifying_primitives dsl req cxt
+  unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt
 
 type 'a likelihood_factorization =
   { normalizers: ('a list, float) Hashtbl.t
