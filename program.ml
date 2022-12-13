@@ -234,53 +234,22 @@ let rec remove_decorative_abstractions ?(n = -1) ?(k = 0) = function
   | _ ->
       None
 
-let rec executable cxt (lookup : string -> 'a) (env : 'a executable list) :
-    program -> 'a executable = function
+let[@warning "-20"] rec execute (lookup : string -> 'a) (eval : 'a -> 'a -> 'a)
+    (env : 'a list) = function
   | Primitive {name; _} ->
-      Base (lookup name)
+      Obj.magic @@ lookup name
   | Invented (_, b) ->
-      executable cxt lookup [] b
+      execute lookup eval [] b
   | Index i ->
-      List.nth_exn env i
-  | Abstraction b as p -> (
-    match remove_decorative_abstractions p with
-    | Some unwrapped ->
-        executable cxt lookup [] unwrapped
-    | None ->
-        Abstraction
-          ( snd @@ infer_type cxt [] p
-          , fun arg -> executable cxt lookup (arg :: env) b ) )
+      Obj.magic @@ List.nth_exn env i
+  | Abstraction b ->
+      Obj.magic (fun x -> execute lookup eval (x :: env) b)
   | Apply (f, x) ->
-      let f' = executable cxt lookup env f in
-      let x' = executable cxt lookup env x in
-      Application (f', x')
+      (Obj.magic @@ execute lookup eval env f)
+        (Obj.magic @@ execute lookup eval env x)
 
-let rec execute
-    (naturalize : dc_type -> ('a executable -> 'a option) -> 'a option)
-    (eval : 'a -> 'a -> 'a) = function
-  | Application (Base f, Base x) ->
-      Some (eval f x)
-  | Application (Abstraction (_, f), x) ->
-      execute naturalize eval (f x)
-  | Application (f, x) -> (
-    match (execute naturalize eval f, execute naturalize eval x) with
-    | Some f', Some x' ->
-        Some (eval f' x')
-    | _ ->
-        None )
-  | Base v ->
-      Some v
-  | Abstraction (ty, f) ->
-      naturalize ty @@ fun arg -> execute naturalize eval (f arg)
-
-let delambda p args =
-  beta_normal_form ~reduce_invented:true
+let evaluate ?(preprocess : program -> program = Fn.id) (lookup : string -> 'a)
+    (eval : 'a -> 'a -> 'a) (args : program list) (p : program) : 'a option =
+  execute lookup eval [] @@ preprocess
+  @@ beta_normal_form ~reduce_invented:true
   @@ List.fold args ~init:p ~f:(fun f x -> Apply (f, x))
-
-let evaluate ?(preprocess : program -> program = Fn.id)
-    (naturalize : dc_type -> ('a executable -> 'a option) -> 'a option)
-    (lookup : string -> 'a) (eval : 'a -> 'a -> 'a) (args : program list)
-    (p : program) : 'a option =
-  let simplified = preprocess @@ delambda p args in
-  let cxt = fst @@ infer_type empty_type_context [] simplified in
-  execute naturalize eval @@ executable cxt lookup [] @@ simplified
