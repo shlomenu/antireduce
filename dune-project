@@ -1,4 +1,4 @@
-(lang dune 3.4)
+(lang dune 3.6)
 
 (name antireduce)
 
@@ -11,7 +11,7 @@
   "Domain-generic polymorphic lambda calculus program representations with inverse beta reduction")
  (description
   "A reimplementation of core functionalities of the DreamCoder program synthesis system")
- (depends core core_kernel domainslib ppx_jane ppx_yojson_conv)
+ (depends core core_unix ppx_jane ppx_compare ppx_yojson_conv)
  (license "MIT")
  (authors "Eli Whitehouse <eliw55@gmail.com>")
  (maintainers "Eli Whitehouse <eliw55@gmail.com>")

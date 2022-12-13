@@ -11,11 +11,11 @@ license: "MIT"
 homepage: "https://github.com/shlomenu/antireduce"
 bug-reports: "https://github.com/shlomenu/antireduce/issues"
 depends: [
-  "dune" {>= "3.4"}
+  "dune" {>= "3.6"}
   "core"
-  "core_kernel"
-  "domainslib"
+  "core_unix"
   "ppx_jane"
+  "ppx_compare"
   "ppx_yojson_conv"
   "odoc" {with-doc}
 ]
