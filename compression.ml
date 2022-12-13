@@ -3,8 +3,6 @@ open Type
 open Program
 open Dsl
 open Versions
-module T = Domainslib.Task
-module C = Domainslib.Chan
 
 let compression_verbosity = ref 0
 
