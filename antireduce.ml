@@ -12,58 +12,6 @@ open Type
 open Program
 open Dsl
 
-type partial_program =
-  | PIndex of int
-  | PAbstraction of partial_program
-  | PApply of partial_program * partial_program
-  | PPrimitive of primitive
-  | PInvented of dc_type * program
-  | Hole of dc_type
-
-let rec partial_of_program = function
-  | Index i ->
-      PIndex i
-  | Abstraction b ->
-      PAbstraction (partial_of_program b)
-  | Apply (f, x) ->
-      PApply (partial_of_program f, partial_of_program x)
-  | Primitive prim ->
-      PPrimitive prim
-  | Invented (ty, b) ->
-      PInvented (ty, b)
-
-let rec program_of_partial = function
-  | PIndex i ->
-      Index i
-  | PAbstraction b ->
-      Abstraction (program_of_partial b)
-  | PApply (f, x) ->
-      Apply (program_of_partial f, program_of_partial x)
-  | PPrimitive prim ->
-      Primitive prim
-  | PInvented (ty, b) ->
-      Invented (ty, b)
-  | Hole _ ->
-      failwith "cannot convert partial program with holes to program"
-
-let string_of_partial_program (p : partial_program) : string =
-  let rec go parenthesized : partial_program -> string = function
-    | PIndex j ->
-        "$" ^ string_of_int j
-    | PAbstraction b ->
-        "(lambda " ^ go true b ^ ")"
-    | PApply (f, x) ->
-        let body = go false f ^ " " ^ go true x in
-        if parenthesized then "(" ^ body ^ ")" else body
-    | PPrimitive {name; _} ->
-        name
-    | PInvented (_, b) ->
-        "#" ^ string_of_program b
-    | Hole ty ->
-        Printf.sprintf "<%s>" (string_of_dc_type ty)
-  in
-  go true p
-
 let rec parameters_length_aux dsl len = function
   | [] ->
       len
@@ -74,12 +22,44 @@ let rec parameters_length_aux dsl len = function
 
 let parameters_length dsl = parameters_length_aux dsl 0
 
+type compressed_generic_expr =
+  | CGIndex of int
+  | CGPrimitive of primitive
+  | CGApply of compressed_generic_expr * compressed_generic_expr
+  | CGAbstraction of dc_type * compressed_generic_expr
+  | CGInvented of dc_type * dc_type * program
+[@@deriving yojson, equal, compare, sexp_of, hash]
+
+let rec program_of_compressed_generic_expr = function
+  | CGIndex i ->
+      Index i
+  | CGPrimitive prim ->
+      Primitive prim
+  | CGApply (f, x) ->
+      Apply
+        ( program_of_compressed_generic_expr f
+        , program_of_compressed_generic_expr x )
+  | CGAbstraction (_, b) ->
+      Abstraction (program_of_compressed_generic_expr b)
+  | CGInvented (ununified_signature, _, b) ->
+      Invented (ununified_signature, b)
+
+let compressed_generic_of_unified_expression unified_signature = function
+  | Index i ->
+      CGIndex i
+  | Primitive prim ->
+      CGPrimitive prim
+  | Invented (ununified_signature, b) ->
+      CGInvented (ununified_signature, unified_signature, b)
+  | _ ->
+      failwith "primitive was not index or base primitive or invented primitive"
+
 let rec enumerate_terminal ~max_size dsl env cxt req size =
   match req with
   | Arrow {left; right; _} ->
       enumerate_terminal ~max_size dsl (left :: env) cxt right size
       |> Option.value_map ~default:None ~f:(fun (b, cxt', size') ->
-             Some (PAbstraction b, cxt', size') )
+             Some (CGAbstraction (left, b), cxt', size') )
   | _ ->
       if size < max_size then
         let rec go remaining_unified =
@@ -91,7 +71,8 @@ let rec enumerate_terminal ~max_size dsl env cxt req size =
           match
             enumerate_parameters ~max_size dsl env selected.context
               selected.parameters
-              (partial_of_program selected.expr)
+              (compressed_generic_of_unified_expression selected.signature
+                 selected.expr )
               (size + 1)
           with
           | Some _ as r ->
@@ -113,12 +94,135 @@ and enumerate_parameters ~max_size dsl env cxt parameters f size =
         enumerate_terminal ~max_size dsl env cxt x_ty size
         |> Option.value_map ~default:None ~f:(fun (x, cxt', size') ->
                enumerate_parameters ~max_size dsl env cxt' rest
-                 (PApply (f, x))
+                 (CGApply (f, x))
                  size' )
 
+type annotated_expr =
+  | AIndex of dc_type * int
+  | APrimitive of dc_type * string
+  | AApply of dc_type * dc_type * dc_type * annotated_expr * annotated_expr
+  | AAbstraction of dc_type * annotated_expr
+
+let string_of_annotated_program =
+  let rec go parenthesized cxt = function
+    | AIndex (ty, j) ->
+        let _, ty = apply_context cxt ty in
+        "($" ^ string_of_int j ^ " : " ^ string_of_dc_type ty ^ ")"
+    | AAbstraction (ty, b) ->
+        let cxt, ty = apply_context cxt ty in
+        "((lambda " ^ go true cxt b ^ ") : " ^ string_of_dc_type ty ^ ")"
+    | AApply (_, _, _, f, x) ->
+        let body = go false cxt f ^ " " ^ go true cxt x in
+        if parenthesized then "(" ^ body ^ ")" else body
+    | APrimitive (ty, name) ->
+        let _, ty = apply_context cxt ty in
+        "(" ^ name ^ " : " ^ string_of_dc_type ty ^ ")"
+  in
+  go true
+
+let rec annotated_of_program cxt env = function
+  | Index i ->
+      let ty = List.nth_exn env i in
+      (cxt, ty, AIndex (ty, i))
+  | Primitive {name; ty} ->
+      let cxt, ty = instantiate_type cxt ty in
+      (cxt, ty, APrimitive (ty, name))
+  | Invented (_, b) ->
+      annotated_of_program cxt env b
+  | Abstraction b ->
+      let parameter_type, cxt = make_type_id cxt in
+      let cxt, terminal_type, b' =
+        annotated_of_program cxt (parameter_type :: env) b
+      in
+      let signature = parameter_type @> terminal_type in
+      (cxt, signature, AAbstraction (signature, b'))
+  | Apply (f, x) ->
+      let cxt, parameter_type, x' = annotated_of_program cxt env x in
+      let cxt, terminal_type, f' = annotated_of_program cxt env f in
+      let function_type =
+        match f' with
+        | AIndex (f_ty, _)
+        | APrimitive (f_ty, _)
+        | AAbstraction (f_ty, _)
+        | AApply (f_ty, _, _, _, _) ->
+            f_ty
+      in
+      ( cxt
+      , terminal_type
+      , AApply (terminal_type, function_type, parameter_type, f', x') )
+
+let rec unify_annotations cxt req = function
+  | AIndex (ty, i) ->
+      let cxt = unify cxt req ty in
+      let cxt, ty = apply_context cxt ty in
+      (cxt, AIndex (ty, i))
+  | APrimitive (ty, name) ->
+      let cxt = unify cxt req ty in
+      let cxt, ty = apply_context cxt ty in
+      (cxt, APrimitive (ty, name))
+  | AAbstraction (function_type, b) ->
+      let cxt = unify cxt req function_type in
+      let cxt, function_type = apply_context cxt function_type in
+      let terminal_type =
+        match function_type with
+        | Arrow {right; _} ->
+            right
+        | _ ->
+            failwith "AAbstraction: function type is not an arrow"
+      in
+      let cxt, b' = unify_annotations cxt terminal_type b in
+      let cxt, function_type = apply_context cxt function_type in
+      (cxt, AAbstraction (function_type, b'))
+  | AApply (terminal_type, function_type, parameter_type, f, x) ->
+      let cxt = unify cxt req terminal_type in
+      let cxt = unify cxt (arrow parameter_type terminal_type) function_type in
+      let cxt, terminal_type = apply_context cxt terminal_type in
+      let cxt, function_type = apply_context cxt function_type in
+      let cxt, parameter_type = apply_context cxt parameter_type in
+      let cxt, x' = unify_annotations cxt parameter_type x in
+      let cxt, f' = unify_annotations cxt function_type f in
+      (cxt, AApply (terminal_type, function_type, parameter_type, f', x'))
+
+type generic_expr =
+  | GIndex of int
+  | GPrimitive of string
+  | GApply of generic_expr * generic_expr
+  | GAbstraction of dc_type * generic_expr
+
+let rec generic_of_annotated = function
+  | AIndex (_, i) ->
+      GIndex i
+  | APrimitive (_, name) ->
+      GPrimitive name
+  | AApply (_, _, _, f, x) ->
+      GApply (generic_of_annotated f, generic_of_annotated x)
+  | AAbstraction (function_type, b) ->
+      let parameter_type =
+        match function_type with
+        | Arrow {left; _} ->
+            left
+        | _ ->
+            failwith "AAbstraction: function type is not an arrow"
+      in
+      GAbstraction (parameter_type, generic_of_annotated b)
+
+let rec decompress_generic = function
+  | CGIndex i ->
+      GIndex i
+  | CGPrimitive {name; _} ->
+      GPrimitive name
+  | CGApply (f, x) ->
+      GApply (decompress_generic f, decompress_generic x)
+  | CGAbstraction (parameter_type, b) ->
+      GAbstraction (parameter_type, decompress_generic b)
+  | CGInvented (_, unified_signature, b) ->
+      generic_of_annotated
+      @@ (fun (cxt, _, ap) -> snd @@ unify_annotations cxt unified_signature ap)
+      @@ annotated_of_program empty_type_context [] b
+
 let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
-    ~representations_dir ~size ~evaluate ~nontrivial ~saveable_output ~parse
-    ~request ~yojson_of_output ~output_of_yojson ~key_of_output ~yojson_of_key
+    ~representations_dir ~size ~preprocess ~evaluate ~load_result ~nontrivial
+    ~parse ~request ~yojson_of_output ~key_of_output ~yojson_of_key
     ~key_of_yojson key_module =
   if not (equal_dc_type request @@ arrow dsl.state_type dsl.state_type) then
     failwith
@@ -132,10 +236,9 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
            in
            let key = key_of_yojson @@ SU.member "key" j in
            let program = parse @@ SU.to_string @@ SU.member "program" j in
-           let output = output_of_yojson @@ SU.member "output" j in
            Hashtbl.update repr key ~f:(function
              | None ->
-                 (None, Some (program, output))
+                 (None, Some program, SU.member "output" j)
              | Some _ ->
                  failwith "found multiple programs with the same output key" ) ;
            repr )
@@ -144,43 +247,44 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
   while not Float.(Core_unix.time () > end_time) do
     let program_and_output =
       let open Option.Let_syntax in
-      let%bind p, _, _ =
+      let%bind cg, _, _ =
         enumerate_terminal ~max_size:size dsl [] empty_type_context request 0
       in
-      let p = program_of_partial p in
-      let%bind o = evaluate ~timeout:eval_timeout ~attempts p in
+      let cg, p = (preprocess cg, program_of_compressed_generic_expr cg) in
+      let%bind _ =
+        evaluate ~timeout:eval_timeout ~attempts p @@ decompress_generic cg
+      in
+      let o = load_result () in
       if nontrivial o then Option.return (p, o) else None
     in
     Option.value_map program_and_output ~default:() ~f:(fun (p, o) ->
         Hashtbl.update representations (key_of_output o) ~f:(function
           | None ->
-              (Some (p, saveable_output o), None)
-          | Some (None, None) ->
+              (Some p, None, yojson_of_output o)
+          | Some (None, None, _) ->
               failwith "unpopulated entry"
-          | Some (None, (Some (prev_p, _) as prev_best)) ->
+          | Some (None, (Some prev_p as prev_best), o) ->
               let cur_best =
-                if size_of_program p < size_of_program prev_p then
-                  Some (p, saveable_output o)
+                if size_of_program p < size_of_program prev_p then Some p
                 else None
               in
-              (cur_best, prev_best)
-          | Some ((Some (cur_p, _) as cur_best), prev_best) ->
+              (cur_best, prev_best, o)
+          | Some ((Some cur_p as cur_best), prev_best, o) ->
               let cur_best =
-                if size_of_program p < size_of_program cur_p then
-                  Some (p, saveable_output o)
+                if size_of_program p < size_of_program cur_p then Some p
                 else cur_best
               in
-              (cur_best, prev_best) ) )
+              (cur_best, prev_best, o) ) )
   done ;
   let n_new, n_replaced, prev_files, cur_files =
     Hashtbl.fold representations ~init:(0, 0, [], [])
       ~f:(fun ~key ~data (n_new, n_replaced, prev_files, cur_files) ->
         match data with
-        | None, None ->
+        | None, None, _ ->
             failwith "unpopulated entry"
-        | None, Some _ ->
+        | None, Some _, _ ->
             (n_new, n_replaced, prev_files, cur_files)
-        | Some (cur_p, cur_o), prev_best ->
+        | Some cur_p, prev_best, o_save ->
             let path_of s =
               Filename.concat representations_dir
               @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex @@ Md5.digest_string s
@@ -189,7 +293,7 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
             let cur_path = path_of cur_ps in
             let n_new', n_replaced', prev_files', cur_files' =
               match prev_best with
-              | Some (prev_p, _) ->
+              | Some prev_p ->
                   let prev_path = path_of @@ string_of_program prev_p in
                   Caml.Sys.remove prev_path ;
                   ( n_new
@@ -202,7 +306,7 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
             S.to_file cur_path
             @@ `Assoc
                  [ ("program", `String cur_ps)
-                 ; ("output", yojson_of_output cur_o)
+                 ; ("output", o_save)
                  ; ("key", yojson_of_key key) ] ;
             (n_new', n_replaced', prev_files', cur_files') )
   in

@@ -3,7 +3,8 @@ open Type
 open Program
 open Util.Yojson_util
 
-type fast_unifier = type_context -> dc_type -> type_context * dc_type list
+type fast_unifier =
+  type_context -> dc_type -> type_context * dc_type list * dc_type
 
 type primitive_entry =
   {name: string; ty: dc_type; impl: program option; unifier: fast_unifier}
@@ -96,11 +97,13 @@ let prob_under_dsl ?(prob_of_index : float = 0.5) dsl p =
 let log_prob_under_dsl dsl = Fn.compose log (prob_under_dsl dsl)
 
 type unifying_expression =
-  {expr: program; parameters: dc_type list; context: type_context}
+  { expr: program
+  ; parameters: dc_type list
+  ; signature: dc_type
+  ; context: type_context }
 
 let unify_environment env req cxt =
   List.filter_mapi env ~f:(fun i ty ->
-      let expr = Index i in
       let context, ty = apply_context cxt ty in
       let terminal_ty = terminal_of_type ty in
       if might_unify terminal_ty req then
@@ -108,8 +111,8 @@ let unify_environment env req cxt =
           let context = unify context terminal_ty req in
           let context, ty = apply_context context ty in
           let parameters = parameters_of_type ty in
-          Some {expr; parameters; context}
-        with UnificationFailure -> None
+          Some {expr= Index i; parameters; signature= ty; context}
+        with UnificationFailure _ -> None
       else None )
 
 let unifying_indices dsl env req cxt =
@@ -135,10 +138,10 @@ let unifying_primitives dsl req cxt =
       try
         let terminal_ty = terminal_of_type ent.ty in
         if might_unify terminal_ty req then
-          let context, parameters = ent.unifier cxt req in
-          Some {expr= primitive_of_entry ent; parameters; context}
+          let context, parameters, signature = ent.unifier cxt req in
+          Some {expr= primitive_of_entry ent; parameters; signature; context}
         else None
-      with UnificationFailure -> None )
+      with UnificationFailure _ -> None )
 
 let unifying_expressions dsl env req cxt =
   unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt

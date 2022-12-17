@@ -1,11 +1,6 @@
 open Core
 open Type
 
-type 'a executable =
-  | Base of 'a
-  | Application of 'a executable * 'a executable
-  | Abstraction of (dc_type * ('a executable -> 'a executable))
-
 type primitive = {name: string; ty: dc_type}
 [@@deriving yojson, equal, compare, sexp_of, hash]
 
@@ -233,23 +228,3 @@ let rec remove_decorative_abstractions ?(n = -1) ?(k = 0) = function
       Some f
   | _ ->
       None
-
-let[@warning "-20"] rec execute (lookup : string -> 'a) (eval : 'a -> 'a -> 'a)
-    (env : 'a list) = function
-  | Primitive {name; _} ->
-      Obj.magic @@ lookup name
-  | Invented (_, b) ->
-      execute lookup eval [] b
-  | Index i ->
-      Obj.magic @@ List.nth_exn env i
-  | Abstraction b ->
-      Obj.magic (fun x -> execute lookup eval (x :: env) b)
-  | Apply (f, x) ->
-      (Obj.magic @@ execute lookup eval env f)
-        (Obj.magic @@ execute lookup eval env x)
-
-let evaluate ?(preprocess : program -> program = Fn.id) (lookup : string -> 'a)
-    (eval : 'a -> 'a -> 'a) (args : program list) (p : program) : 'a option =
-  execute lookup eval [] @@ preprocess
-  @@ beta_normal_form ~reduce_invented:true
-  @@ List.fold args ~init:p ~f:(fun f x -> Apply (f, x))

@@ -130,7 +130,7 @@ let refactor i req e =
         (beta_normal_form ~reduce_invented:true e)
         (beta_normal_form ~reduce_invented:true e') ) ;
     e'
-  with UnificationFailure ->
+  with UnificationFailure _ ->
     if !compression_verbosity >= 4 then (
       Printf.eprintf "WARNING: rewriting with invention gave ill typed term.\n" ;
       Printf.eprintf "Original:\t\t%s\n" (string_of_program e) ;
@@ -191,7 +191,7 @@ let extract_inventions version_tbl cost_tbl spaces =
              try
                ignore (normalize_invention p : program) ;
                nontrivial p
-             with UnificationFailure -> false ) )
+             with UnificationFailure _ -> false ) )
 
 let expand_dsl dsl invention =
   let primitive = normalize_invention invention in
@@ -261,7 +261,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                                  invention )
                      in
                      (score frontier' dsl', dsl', frontier')
-                   with UnificationFailure | DuplicatePrimitive ->
+                   with UnificationFailure _ | DuplicatePrimitive ->
                      (Float.neg_infinity, dsl, frontier)
                  in
                  if !compression_verbosity >= 2 then (
