@@ -183,7 +183,7 @@ let rec occurs i = function
 
 let occurs_check = true
 
-exception UnificationFailure
+exception UnificationFailure of string
 
 let rec might_unify ty_1 ty_2 =
   match (ty_1, ty_2) with
@@ -201,12 +201,22 @@ let rec unify cxt ty_1 ty_2 =
   let cxt, ty_1 = apply_context cxt ty_1 in
   let cxt, ty_2 = apply_context cxt ty_2 in
   if (not (is_polymorphic ty_1)) && not (is_polymorphic ty_2) then
-    if equal_dc_type ty_1 ty_2 then cxt else raise UnificationFailure
+    if equal_dc_type ty_1 ty_2 then cxt
+    else
+      raise
+        (UnificationFailure
+           (Format.sprintf "monomorphic types are not equal: %s <> %s"
+              (string_of_dc_type ty_1) (string_of_dc_type ty_2) ) )
   else
     match (ty_1, ty_2) with
     | Id j, ty_other | ty_other, Id j ->
         if equal_dc_type ty_1 ty_2 then cxt
-        else if occurs j ty_other then raise UnificationFailure
+        else if occurs j ty_other then
+          raise
+            (UnificationFailure
+               (Format.sprintf "occurs check did not pass: %s occurs in %s"
+                  (string_of_dc_type (Id j))
+                  (string_of_dc_type ty_other) ) )
         else bind_type_id j ty_other cxt
     | Arrow arw_1, Arrow arw_2 ->
         let cxt = unify cxt arw_1.left arw_2.left in
@@ -215,7 +225,10 @@ let rec unify cxt ty_1 ty_2 =
       ->
         List.fold2_exn ~init:cxt con_1.parameters con_2.parameters ~f:unify
     | _ ->
-        raise UnificationFailure
+        raise
+          (UnificationFailure
+             (Format.sprintf "dissimilar structure: %s <> %s"
+                (string_of_dc_type ty_1) (string_of_dc_type ty_2) ) )
 
 let instantiate_type cxt ty =
   let types = ref [] in
@@ -407,7 +420,11 @@ let rec fast_unify cxt fast_ty ty =
   | FConstructor f_c, Constructor c ->
       if String.(f_c.name = c.name) then
         List.fold2_exn f_c.parameters c.parameters ~init:cxt ~f:fast_unify
-      else raise UnificationFailure
+      else
+        raise
+          (UnificationFailure
+             (Format.sprintf "constructors are not the same: %s <> %s" f_c.name
+                c.name ) )
   | FArrow {polymorphic= Some ty'; _}, Id i
   | FConstructor {polymorphic= Some ty'; _}, Id i ->
       bind_type_id i ty' cxt
@@ -426,7 +443,7 @@ let rec fast_unify cxt fast_ty ty =
       let cxt = bind_type_id i (Constructor c) cxt in
       List.fold2_exn fast_parameters parameters ~init:cxt ~f:fast_unify
   | FArrow _, Constructor _ | FConstructor _, Arrow _ ->
-      raise UnificationFailure
+      raise (UnificationFailure "constructor does not unify with arrow")
 
 let make_fast_unifier ty =
   let fast_ty, types = fast_of_slow ty in
@@ -436,9 +453,16 @@ let make_fast_unifier ty =
     let cxt = fast_unify cxt terminal_fast_ty req in
     let next_id = cxt.next_id in
     let next_id_ref = ref next_id in
+    let terminal = slow_of_fast next_id_ref terminal_fast_ty in
     let parameters =
       List.map parameters_fast_ty ~f:(slow_of_fast next_id_ref)
     in
+    let rec go = function
+      | left :: rest ->
+          arrow left @@ go rest
+      | [] ->
+          terminal
+    in
     let cxt = snd @@ make_type_ids (!next_id_ref - next_id) cxt in
     Array.iter types ~f:(fun ty_opt -> ty_opt := None) ;
-    (cxt, parameters)
+    (cxt, parameters, go parameters)
