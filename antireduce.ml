@@ -22,44 +22,12 @@ let rec parameters_length_aux dsl len = function
 
 let parameters_length dsl = parameters_length_aux dsl 0
 
-type compressed_generic_expr =
-  | CGIndex of int
-  | CGPrimitive of primitive
-  | CGApply of compressed_generic_expr * compressed_generic_expr
-  | CGAbstraction of dc_type * compressed_generic_expr
-  | CGInvented of dc_type * dc_type * program
-[@@deriving yojson, equal, compare, sexp_of, hash]
-
-let rec program_of_compressed_generic_expr = function
-  | CGIndex i ->
-      Index i
-  | CGPrimitive prim ->
-      Primitive prim
-  | CGApply (f, x) ->
-      Apply
-        ( program_of_compressed_generic_expr f
-        , program_of_compressed_generic_expr x )
-  | CGAbstraction (_, b) ->
-      Abstraction (program_of_compressed_generic_expr b)
-  | CGInvented (ununified_signature, _, b) ->
-      Invented (ununified_signature, b)
-
-let compressed_generic_of_unified_expression unified_signature = function
-  | Index i ->
-      CGIndex i
-  | Primitive prim ->
-      CGPrimitive prim
-  | Invented (ununified_signature, b) ->
-      CGInvented (ununified_signature, unified_signature, b)
-  | _ ->
-      failwith "primitive was not index or base primitive or invented primitive"
-
 let rec enumerate_terminal ~max_size dsl env cxt req size =
   match req with
   | Arrow {left; right; _} ->
       enumerate_terminal ~max_size dsl (left :: env) cxt right size
       |> Option.value_map ~default:None ~f:(fun (b, cxt', size') ->
-             Some (CGAbstraction (left, b), cxt', size') )
+             Some (Abstraction b, cxt', size') )
   | _ ->
       if size < max_size then
         let rec go remaining_unified =
@@ -70,10 +38,7 @@ let rec enumerate_terminal ~max_size dsl env cxt req size =
           in
           match
             enumerate_parameters ~max_size dsl env selected.context
-              selected.parameters
-              (compressed_generic_of_unified_expression selected.signature
-                 selected.expr )
-              (size + 1)
+              selected.parameters selected.expr (size + 1)
           with
           | Some _ as r ->
               r
@@ -94,7 +59,7 @@ and enumerate_parameters ~max_size dsl env cxt parameters f size =
         enumerate_terminal ~max_size dsl env cxt x_ty size
         |> Option.value_map ~default:None ~f:(fun (x, cxt', size') ->
                enumerate_parameters ~max_size dsl env cxt' rest
-                 (CGApply (f, x))
+                 (Apply (f, x))
                  size' )
 
 type annotated_expr =
@@ -103,7 +68,7 @@ type annotated_expr =
   | AApply of dc_type * dc_type * dc_type * annotated_expr * annotated_expr
   | AAbstraction of dc_type * annotated_expr
 
-let string_of_annotated_program =
+let string_of_annotated_expr =
   let rec go parenthesized cxt = function
     | AIndex (ty, j) ->
         let _, ty = apply_context cxt ty in
@@ -120,7 +85,7 @@ let string_of_annotated_program =
   in
   go true
 
-let rec annotated_of_program cxt env = function
+let rec instantiate_all cxt env = function
   | Index i ->
       let ty = List.nth_exn env i in
       (cxt, ty, AIndex (ty, i))
@@ -128,66 +93,83 @@ let rec annotated_of_program cxt env = function
       let cxt, ty = instantiate_type cxt ty in
       (cxt, ty, APrimitive (ty, name))
   | Invented (_, b) ->
-      annotated_of_program cxt env b
+      instantiate_all cxt [] b
   | Abstraction b ->
       let parameter_type, cxt = make_type_id cxt in
       let cxt, terminal_type, b' =
-        annotated_of_program cxt (parameter_type :: env) b
+        instantiate_all cxt (parameter_type :: env) b
       in
-      let signature = parameter_type @> terminal_type in
-      (cxt, signature, AAbstraction (signature, b'))
+      let function_type = parameter_type @> terminal_type in
+      (cxt, function_type, AAbstraction (function_type, b'))
   | Apply (f, x) ->
-      let cxt, parameter_type, x' = annotated_of_program cxt env x in
-      let cxt, terminal_type, f' = annotated_of_program cxt env f in
-      let function_type =
-        match f' with
-        | AIndex (f_ty, _)
-        | APrimitive (f_ty, _)
-        | AAbstraction (f_ty, _)
-        | AApply (f_ty, _, _, _, _) ->
-            f_ty
+      let cxt, function_type, f' = instantiate_all cxt env f in
+      let cxt, parameter_type, x' = instantiate_all cxt env x in
+      let cxt, terminal_type =
+        match function_type with
+        | Arrow {right; _} ->
+            (cxt, right)
+        | Constructor _ ->
+            failwith
+            @@ Format.sprintf "function_type is not an arrow: %s"
+            @@ string_of_annotated_expr cxt f'
+        | Id _ ->
+            let terminal_type, cxt = make_type_id cxt in
+            (cxt, terminal_type)
       in
+      let cxt = unify cxt function_type (parameter_type @> terminal_type) in
       ( cxt
       , terminal_type
       , AApply (terminal_type, function_type, parameter_type, f', x') )
 
-let rec unify_annotations cxt req = function
-  | AIndex (ty, i) ->
-      let cxt = unify cxt req ty in
-      let cxt, ty = apply_context cxt ty in
-      (cxt, AIndex (ty, i))
-  | APrimitive (ty, name) ->
-      let cxt = unify cxt req ty in
-      let cxt, ty = apply_context cxt ty in
-      (cxt, APrimitive (ty, name))
+let rec unify_all cxt req = function
+  | AIndex (ty, _) | APrimitive (ty, _) ->
+      unify cxt req ty
   | AAbstraction (function_type, b) ->
       let cxt = unify cxt req function_type in
-      let cxt, function_type = apply_context cxt function_type in
-      let terminal_type =
-        match function_type with
-        | Arrow {right; _} ->
-            right
-        | _ ->
-            failwith "AAbstraction: function type is not an arrow"
-      in
-      let cxt, b' = unify_annotations cxt terminal_type b in
-      let cxt, function_type = apply_context cxt function_type in
-      (cxt, AAbstraction (function_type, b'))
+      unify_all cxt (right_of_arrow req) b
   | AApply (terminal_type, function_type, parameter_type, f, x) ->
       let cxt = unify cxt req terminal_type in
-      let cxt = unify cxt (arrow parameter_type terminal_type) function_type in
-      let cxt, terminal_type = apply_context cxt terminal_type in
-      let cxt, function_type = apply_context cxt function_type in
-      let cxt, parameter_type = apply_context cxt parameter_type in
-      let cxt, x' = unify_annotations cxt parameter_type x in
-      let cxt, f' = unify_annotations cxt function_type f in
-      (cxt, AApply (terminal_type, function_type, parameter_type, f', x'))
+      let cxt = unify_all cxt function_type f in
+      unify_all cxt parameter_type x
+
+let rec apply_context_all cxt = function
+  | AIndex (ty, i) ->
+      let _, ty' = apply_context cxt ty in
+      AIndex (ty', i)
+  | APrimitive (ty, name) ->
+      let _, ty' = apply_context cxt ty in
+      APrimitive (ty', name)
+  | AAbstraction (function_type, b) ->
+      let cxt, function_type' = apply_context cxt function_type in
+      AAbstraction (function_type', apply_context_all cxt b)
+  | AApply (terminal_type, function_type, parameter_type, f, x) ->
+      let cxt, terminal_type' = apply_context cxt terminal_type in
+      let cxt, function_type' = apply_context cxt function_type in
+      let cxt, parameter_type' = apply_context cxt parameter_type in
+      let f' = apply_context_all cxt f in
+      let x' = apply_context_all cxt x in
+      AApply (terminal_type', function_type', parameter_type', f', x')
 
 type generic_expr =
   | GIndex of int
   | GPrimitive of string
   | GApply of generic_expr * generic_expr
   | GAbstraction of dc_type * generic_expr
+
+let string_of_generic_expr =
+  let rec go parenthesized cxt = function
+    | GIndex j ->
+        "$" ^ string_of_int j
+    | GAbstraction (ty, b) ->
+        let cxt, ty = apply_context cxt ty in
+        "(lambda (" ^ string_of_dc_type ty ^ ") " ^ go true cxt b ^ ")"
+    | GApply (f, x) ->
+        let body = go false cxt f ^ " " ^ go true cxt x in
+        if parenthesized then "(" ^ body ^ ")" else body
+    | GPrimitive name ->
+        name
+  in
+  go true
 
 let rec generic_of_annotated = function
   | AIndex (_, i) ->
@@ -197,32 +179,16 @@ let rec generic_of_annotated = function
   | AApply (_, _, _, f, x) ->
       GApply (generic_of_annotated f, generic_of_annotated x)
   | AAbstraction (function_type, b) ->
-      let parameter_type =
-        match function_type with
-        | Arrow {left; _} ->
-            left
-        | _ ->
-            failwith "AAbstraction: function type is not an arrow"
-      in
-      GAbstraction (parameter_type, generic_of_annotated b)
+      GAbstraction (left_of_arrow function_type, generic_of_annotated b)
 
-let rec decompress_generic = function
-  | CGIndex i ->
-      GIndex i
-  | CGPrimitive {name; _} ->
-      GPrimitive name
-  | CGApply (f, x) ->
-      GApply (decompress_generic f, decompress_generic x)
-  | CGAbstraction (parameter_type, b) ->
-      GAbstraction (parameter_type, decompress_generic b)
-  | CGInvented (_, unified_signature, b) ->
-      generic_of_annotated
-      @@ (fun (cxt, _, ap) -> snd @@ unify_annotations cxt unified_signature ap)
-      @@ annotated_of_program empty_type_context [] b
+let generic_expr_of_program req p =
+  let cxt, _, ap = instantiate_all empty_type_context [] p in
+  let cxt = unify_all cxt req ap in
+  generic_of_annotated @@ apply_context_all cxt ap
 
 let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
-    ~representations_dir ~size ~preprocess ~evaluate ~load_result ~nontrivial
-    ~parse ~request ~yojson_of_output ~key_of_output ~yojson_of_key
+    ~representations_dir ~size ~apply_to_state ~evaluate ~retrieve_result
+    ~nontrivial ~parse ~request ~yojson_of_output ~key_of_output ~yojson_of_key
     ~key_of_yojson key_module =
   if not (equal_dc_type request @@ arrow dsl.state_type dsl.state_type) then
     failwith
@@ -235,10 +201,10 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
              S.from_file @@ Filename.concat representations_dir filename
            in
            let key = key_of_yojson @@ SU.member "key" j in
-           let program = parse @@ SU.to_string @@ SU.member "program" j in
+           let p = parse @@ SU.to_string @@ SU.member "program" j in
            Hashtbl.update repr key ~f:(function
              | None ->
-                 (None, Some program, SU.member "output" j)
+                 (None, Some p, SU.member "output" j)
              | Some _ ->
                  failwith "found multiple programs with the same output key" ) ;
            repr )
@@ -247,14 +213,15 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
   while not Float.(Core_unix.time () > end_time) do
     let program_and_output =
       let open Option.Let_syntax in
-      let%bind cg, _, _ =
+      let%bind p, _, _ =
         enumerate_terminal ~max_size:size dsl [] empty_type_context request 0
       in
-      let cg, p = (preprocess cg, program_of_compressed_generic_expr cg) in
+      let p_applied = apply_to_state p in
       let%bind _ =
-        evaluate ~timeout:eval_timeout ~attempts p @@ decompress_generic cg
+        evaluate ~timeout:eval_timeout ~attempts p_applied
+        @@ generic_expr_of_program dsl.state_type p_applied
       in
-      let o = load_result () in
+      let o = retrieve_result () in
       if nontrivial o then Option.return (p, o) else None
     in
     Option.value_map program_and_output ~default:() ~f:(fun (p, o) ->
