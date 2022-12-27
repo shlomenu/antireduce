@@ -213,6 +213,7 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
   while not Float.(Core_unix.time () > end_time) do
     let program_and_output =
       let open Option.Let_syntax in
+      Random.self_init () ;
       let%bind p, _, _ =
         enumerate_terminal ~max_size:size dsl [] empty_type_context request 0
       in
