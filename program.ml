@@ -191,28 +191,26 @@ let rec substitute i v = function
 
 let rec beta_normal_form ?(reduce_invented = false) p =
   let rec step = function
-    | Abstraction b ->
-        Option.value_map (step b)
-          ~f:(fun b' -> Some (Abstraction b'))
-          ~default:None
+    | Abstraction b -> (
+      match step b with Some b' -> Some (Abstraction b') | None -> None )
     | Invented (_, b) when reduce_invented ->
         Some b
-    | Apply (f, x) ->
-        Option.value_map (step f)
-          ~f:(fun f' -> Some (Apply (f', x)))
-          ~default:
-            (Option.value_map (step x)
-               ~f:(fun x' -> Some (Apply (f, x')))
-               ~default:
-                 ( match f with
-                 | Abstraction b ->
-                     let reduction =
-                       shift_free_variables (-1)
-                         (substitute 0 (shift_free_variables 1 x) b)
-                     in
-                     Some reduction
-                 | _ ->
-                     None ) )
+    | Apply (f, x) -> (
+      match step f with
+      | Some f' ->
+          Some (Apply (f', x))
+      | None -> (
+        match step x with
+        | Some x' ->
+            Some (Apply (f, x'))
+        | None -> (
+          match f with
+          | Abstraction b ->
+              Some
+                (shift_free_variables (-1)
+                   (substitute 0 (shift_free_variables 1 x) b) )
+          | _ ->
+              None ) ) )
     | _ ->
         None
   in
