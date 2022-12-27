@@ -182,7 +182,10 @@ let rec generic_of_annotated = function
       GAbstraction (left_of_arrow function_type, generic_of_annotated b)
 
 let generic_expr_of_program req p =
-  let cxt, _, ap = instantiate_all empty_type_context [] p in
+  let cxt, _, ap =
+    instantiate_all empty_type_context []
+    @@ beta_normal_form ~reduce_invented:true p
+  in
   let cxt = unify_all cxt req ap in
   generic_of_annotated @@ apply_context_all cxt ap
 
