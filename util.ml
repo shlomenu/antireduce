@@ -132,6 +132,10 @@ module OrdIntPair = struct
   include Comparator.Make (IntPair)
 end
 
+module FloatPair = struct
+  type t = float * float [@@deriving compare]
+end
+
 module Array_list = struct
   type 'a t = {mutable occupancy: int; mutable contents: 'a option Array.t}
 

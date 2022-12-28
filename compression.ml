@@ -233,7 +233,7 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
   Util.flush_all () ;
   if List.is_empty inventions then None
   else
-    let[@warning "-27"] ( best_score
+    let[@warning "-27"] ( (invention_size, best_score)
                         , dsl'
                         , frontier'
                         , best_invention_space
@@ -241,8 +241,16 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                         , best_primitive ) =
       Util.time_it (Printf.sprintf "Evaluated top %d refactorings" top_i)
         (fun () ->
-          Util.minimum ~compare:Float.compare ~key:(fun (s, _, _, _, _, _) ->
-              -.s )
+          Util.minimum ~compare:Util.FloatPair.compare
+            ~key:(fun (s_comb, _, _, _, _, _) -> s_comb)
+          @@ List.map
+               ~f:(fun (score, dsl', frontier', i, invention, primitive) ->
+                 ( (float_of_int @@ size_of_program invention, -.score)
+                 , dsl'
+                 , frontier'
+                 , i
+                 , invention
+                 , primitive ) )
           @@ List.map ranked_inventions ~f:(fun (cost, i) ->
                  Gc.compact () ;
                  let invention = extract_program tbl i in
@@ -275,12 +283,13 @@ let compression_step ~inlining ~dsl_size_penalty ~primitive_size_penalty
                    Util.flush_all () ) ;
                  (score, dsl', frontier', i, invention, primitive) ) )
     in
-    let initial_score = score frontier dsl in
+    let initial_score = -.score frontier dsl in
     Printf.eprintf
-      "Improved score from %f to %f (difference: %f) w/ new primitive\n\
-       \t(%s : %s)\n"
+      "Improved score from %f to %f (difference: %f) w/ new primitive of size %d\n\
+       \t(%s : %s)\n\n"
       initial_score best_score
       (best_score -. initial_score)
+      (int_of_float invention_size)
       (string_of_program best_primitive)
       (string_of_dc_type @@ canonical_type @@ closed_inference best_primitive) ;
     Util.flush_all () ;
