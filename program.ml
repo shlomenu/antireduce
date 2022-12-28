@@ -9,7 +9,7 @@ type program =
   | Abstraction of program
   | Apply of program * program
   | Primitive of primitive
-  | Invented of dc_type * program
+  | Invented of (dc_type[@equal.ignore] [@compare.ignore]) * program
 [@@deriving yojson, equal, compare, sexp_of, hash]
 
 module Program = struct
