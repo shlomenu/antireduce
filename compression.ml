@@ -26,8 +26,8 @@ let dsl_induction_score ~primitive_size_penalty ~dsl_size_penalty request
         failwith "dsl contains entry which is not base or invented primitive"
   in
   log_prob
-  -. (primitive_size_penalty *. (Float.of_int @@ List.length dsl.library))
-  -. dsl_size_penalty
+  -. (dsl_size_penalty *. (Float.of_int @@ List.length dsl.library))
+  -. primitive_size_penalty
      *. ( Float.of_int @@ List.reduce_exn ~f:( + )
         @@ List.map dsl.library ~f:(fun ent ->
                production_size @@ primitive_of_entry ent ) )
