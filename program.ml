@@ -68,6 +68,16 @@ let rec size_of_program = function
   | Index _ | Invented _ | Primitive _ ->
       1
 
+let rec mass_of_program = function
+  | Apply (f, x) ->
+      mass_of_program f + mass_of_program x
+  | Abstraction b ->
+      mass_of_program b
+  | Index _ | Primitive _ ->
+      1
+  | Invented (_, b) ->
+      mass_of_program b
+
 let rec subexpressions p =
   let subexprs = List.map (child_programs p) ~f:subexpressions |> List.concat in
   p :: subexprs

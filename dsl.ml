@@ -25,7 +25,8 @@ let primitive_entry_of_yojson = function
   | _ ->
       failwith "primitive_entry_of_yojson: invalid JSON"
 
-type dsl = {library: primitive_entry list; state_type: dc_type; size: int}
+type dsl =
+  {library: primitive_entry list; state_type: dc_type; size: int; mass: int}
 [@@deriving yojson]
 
 let string_of_dsl dsl =
@@ -36,27 +37,27 @@ let string_of_dsl dsl =
            string_of_dc_type ent.ty ^ "\t" ^ ent.name ) )
 
 let dsl_of_primitives state_type primitives =
-  let library =
-    List.map primitives ~f:(function
-      | Primitive {name; ty} ->
-          let unifier = make_fast_unifier ty in
-          {name; ty; impl= None; unifier}
-      | Invented (ty, b) ->
-          let unifier = make_fast_unifier ty in
-          {name= string_of_program b; ty; impl= Some b; unifier}
-      | _ ->
-          failwith "dsl_of_primitives: not a base primitive" )
-  in
-  let size = List.length library in
-  {library; state_type; size}
+  { library=
+      List.map primitives ~f:(function
+        | Primitive {name; ty} ->
+            let unifier = make_fast_unifier ty in
+            {name; ty; impl= None; unifier}
+        | Invented (ty, b) ->
+            let unifier = make_fast_unifier ty in
+            {name= string_of_program b; ty; impl= Some b; unifier}
+        | _ ->
+            failwith "dsl_of_primitives: not a base primitive" )
+  ; state_type
+  ; size= List.length primitives
+  ; mass= Util.fold1 ~f:( + ) @@ List.map primitives ~f:mass_of_program }
 
 exception DuplicatePrimitive
 
 let dedup_dsl_of_primitives state_type primitives =
-  let n_unique_prims =
+  let size =
     List.length @@ List.dedup_and_sort ~compare:compare_program primitives
   in
-  if List.length primitives = n_unique_prims then
+  if List.length primitives = size then
     { library=
         List.map primitives ~f:(function
           | Primitive {name; ty} ->
@@ -70,7 +71,8 @@ let dedup_dsl_of_primitives state_type primitives =
               failwith
                 "dedup_dsl_of_primitives: not a base or invented primitive" )
     ; state_type
-    ; size= n_unique_prims }
+    ; size
+    ; mass= Util.fold1 ~f:( + ) @@ List.map primitives ~f:mass_of_program }
   else raise DuplicatePrimitive
 
 let primitive_of_entry ent =

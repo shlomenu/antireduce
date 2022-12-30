@@ -277,6 +277,8 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
             S.to_file cur_path
             @@ `Assoc
                  [ ("program", `String cur_ps)
+                 ; ("size", `Int (size_of_program cur_p))
+                 ; ("mass", `Int (mass_of_program cur_p))
                  ; ("output", o_save)
                  ; ("key", yojson_of_key key) ] ;
             (n_new', n_replaced', prev_files', cur_files') )
@@ -312,7 +314,9 @@ let overwrite_representations programs' paths file_contents =
            @@ string_of_program program'
          , Util.Yojson_util.sub "program"
              (`String (string_of_program program'))
-             file_content ) )
+             file_content
+           |> Util.Yojson_util.sub "size" (`Int (size_of_program program'))
+           |> Util.Yojson_util.sub "mass" (`Int (mass_of_program program')) ) )
   |> List.filter_map ~f:(fun (prev_path, cur_path, file_content') ->
          Caml.Sys.remove prev_path ;
          S.to_file cur_path file_content' ;

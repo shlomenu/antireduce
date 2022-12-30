@@ -188,12 +188,15 @@ let rec child_spaces tbl i =
   in
   List.dedup_and_sort (i :: children) ~compare:( - )
 
-let rec shift_free ?(c = 0) tbl ~n ~i =
+(* produces a version space equivalent to `i` with
+     free variables downshifted by `n` *)
+let rec downshift_free_vars ?(c = 0) tbl ~n ~i =
   if n = 0 then i
   else
     match version_of_int tbl i with
     | Union indices ->
-        union tbl @@ List.map indices ~f:(fun j -> shift_free ~c tbl ~n ~i:j)
+        union tbl
+        @@ List.map indices ~f:(fun j -> downshift_free_vars ~c tbl ~n ~i:j)
     | IndexSpace j when j < c ->
         i
     | IndexSpace j when j >= n + c ->
@@ -202,20 +205,22 @@ let rec shift_free ?(c = 0) tbl ~n ~i =
         tbl.void
     | ApplySpace (f, x) ->
         version_of_apply tbl
-          (shift_free ~c tbl ~n ~i:f)
-          (shift_free ~c tbl ~n ~i:x)
+          (downshift_free_vars ~c tbl ~n ~i:f)
+          (downshift_free_vars ~c tbl ~n ~i:x)
     | AbstractionSpace b ->
-        version_of_abstraction tbl (shift_free ~c:(c + 1) tbl ~n ~i:b)
+        version_of_abstraction tbl (downshift_free_vars ~c:(c + 1) tbl ~n ~i:b)
     | TerminalSpace _ | Universe | Void ->
         i
 
-let rec shift_versions ?(c = 0) tbl ~n ~i =
+(* produces a version space equivalent to `i` with
+    free variables upshifted by `n` *)
+let rec upshift_free_vars ?(c = 0) tbl ~n ~i =
   if n = 0 then i
   else
     match version_of_int tbl i with
     | Union indices ->
         union tbl
-        @@ List.map indices ~f:(fun j -> shift_versions ~c tbl ~n ~i:j)
+        @@ List.map indices ~f:(fun j -> upshift_free_vars ~c tbl ~n ~i:j)
     | IndexSpace j when j < c ->
         i
     | IndexSpace j when j + n >= 0 ->
@@ -224,10 +229,10 @@ let rec shift_versions ?(c = 0) tbl ~n ~i =
         tbl.void
     | ApplySpace (f, x) ->
         version_of_apply tbl
-          (shift_versions ~c tbl ~n ~i:f)
-          (shift_versions ~c tbl ~n ~i:x)
+          (upshift_free_vars ~c tbl ~n ~i:f)
+          (upshift_free_vars ~c tbl ~n ~i:x)
     | AbstractionSpace b ->
-        version_of_abstraction tbl (shift_versions ~c:(c + 1) tbl ~n ~i:b)
+        version_of_abstraction tbl (upshift_free_vars ~c:(c + 1) tbl ~n ~i:b)
     | TerminalSpace _ | Universe | Void ->
         i
 
@@ -328,7 +333,7 @@ let inline tbl =
           | Index i when i < k ->
               version_of_index tbl i
           | Index i when i - k < List.length env ->
-              shift_versions tbl ~n:k ~i:(List.nth_exn env (i - k))
+              upshift_free_vars tbl ~n:k ~i:(List.nth_exn env (i - k))
           | Index i ->
               version_of_index tbl (i - List.length env)
           | Apply (f, x) ->
@@ -419,7 +424,7 @@ let rec substitutions tbl ?(n = 0) i =
   | Some m ->
       m
   | None ->
-      let v = shift_free tbl ~n ~i in
+      let v = downshift_free_vars tbl ~n ~i in
       let m = Hashtbl.create (module Int) in
       ( if v <> tbl.void then
         let b = version_of_index tbl n in
@@ -636,24 +641,24 @@ let gc_versions ?(verbose = false) tbl is =
 
 let epsilon_cost = 0.01
 
-type cost_tbl =
+type cost_and_version_tbl =
   { function_cost: (float * int list) option Array_list.t
   ; argument_cost: (float * int list) option Array_list.t
   ; parent: version_tbl }
 
-let empty_cost_tbl tbl =
+let empty_cost_and_version_tbl tbl =
   { function_cost= Array_list.create ()
   ; argument_cost= Array_list.create ()
   ; parent= tbl }
 
-(* The minimal inhabitants-related functions all abbreviate
+(* The minimal inhabitant-related functions abbreviate
     their search by skipping inhabitants containing applications
-    whose functions are abstractions.  This is justified by the
-    fact that any application whose function is a abstraction is
-    unnecessary (one could find the inhabitant with this application
-    already beta-reduced).  I assume this trick saves on performance,
-    because strictly speaking it should not be necessary for the
-    correctness of the implementation. *)
+    whose functions are abstractions, but which are not primitives.
+    This matches the form in which programs are synthesized, and which
+    is maintained during the application of inverse beta-reduction.
+    If this invariant is not maintained at an earlier point in the
+    process of program synthesis or translation into version spaces,
+    these functions will not return a minimal inhabitant. *)
 let rec minimum_cost_inhabitants ?(given = None) ?(can_be_lambda = true)
     cost_tbl i =
   let cache =
@@ -718,12 +723,12 @@ let rec minimum_cost_inhabitants ?(given = None) ?(can_be_lambda = true)
       Array_list.set cache i (Some c_inds) ;
       c_inds
 
-type 'a cheap_cost_tbl =
+type cost_tbl =
   { function_cost: float option Array_list.t
   ; argument_cost: float option Array_list.t
   ; parent: version_tbl }
 
-let empty_cheap_cost_tbl tbl =
+let empty_cost_tbl tbl =
   { function_cost= Array_list.create ()
   ; argument_cost= Array_list.create ()
   ; parent= tbl }
@@ -851,8 +856,9 @@ let inventions_costs tbl inventions =
       Hashtbl.set costs ~key:invention ~data:(1. +. cost) ) ;
   costs
 
-let beams ~(cost_tbl : cost_tbl) ~beam_size inventions frontier =
-  let costs = inventions_costs cost_tbl.parent inventions in
+let beams ~(cost_and_version_tbl : cost_and_version_tbl) ~beam_size inventions
+    frontier =
+  let costs = inventions_costs cost_and_version_tbl.parent inventions in
   let inventions = Hash_set.Poly.of_list inventions in
   let cache = Array_list.create () in
   let rec go i =
@@ -862,10 +868,10 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size inventions frontier =
         beam
     | None ->
         let unrefactored_arg_cost, inhabitants =
-          minimum_cost_inhabitants ~can_be_lambda:true cost_tbl i
+          minimum_cost_inhabitants ~can_be_lambda:true cost_and_version_tbl i
         in
         let unrefactored_func_cost, _ =
-          minimum_cost_inhabitants ~can_be_lambda:false cost_tbl i
+          minimum_cost_inhabitants ~can_be_lambda:false cost_and_version_tbl i
         in
         let beam =
           { unrefactored_arg_cost
@@ -878,7 +884,7 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size inventions frontier =
                let cost = Hashtbl.find_exn costs invention in
                Hashtbl.set beam.refactored_func_cost ~key:invention ~data:cost ;
                Hashtbl.set beam.refactored_arg_cost ~key:invention ~data:cost ) ;
-        ( match version_of_int cost_tbl.parent i with
+        ( match version_of_int cost_and_version_tbl.parent i with
         | AbstractionSpace b ->
             let child = go b in
             Hashtbl.iteri child.refactored_arg_cost ~f:(fun ~key ~data ->
@@ -913,8 +919,8 @@ let beams ~(cost_tbl : cost_tbl) ~beam_size inventions frontier =
   List.iter frontier ~f:(fun i -> ignore (go i : beam)) ;
   cache
 
-let beam_costs ~cost_tbl ~beam_size inventions frontier =
-  let cache = beams ~cost_tbl ~beam_size inventions frontier in
+let beam_costs ~cost_and_version_tbl ~beam_size inventions frontier =
+  let cache = beams ~cost_and_version_tbl ~beam_size inventions frontier in
   let beams =
     List.map frontier ~f:(fun i -> Util.value_exn @@ Array_list.get cache i)
   in
@@ -923,7 +929,7 @@ let beam_costs ~cost_tbl ~beam_size inventions frontier =
       @@ List.map beams ~f:(fun beam ->
              Float.min (arg_cost beam invention) (func_cost beam invention) ) )
 
-let beams_and_costs ~cost_tbl ~beam_size ~inventions frontier =
-  let costs = beam_costs ~cost_tbl ~beam_size inventions frontier in
+let beams_and_costs ~cost_and_version_tbl ~beam_size ~inventions frontier =
+  let costs = beam_costs ~cost_and_version_tbl ~beam_size inventions frontier in
   List.zip_exn costs inventions
   |> List.sort ~compare:(fun (s_1, _) (s_2, _) -> Float.compare s_1 s_2)
