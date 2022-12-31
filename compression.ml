@@ -177,9 +177,11 @@ let extract_inventions version_tbl cost_tbl spaces =
 let expand_dsl dsl invention =
   let primitive = normalize_invention invention in
   let primitives = primitives_of_dsl dsl in
-  if List.mem ~equal:equal_program primitives primitive then
-    raise DuplicatePrimitive ;
-  (primitive, dedup_dsl_of_primitives dsl.state_type (primitive :: primitives))
+  if List.mem ~equal:equal_program primitives primitive then None
+  else
+    Some
+      ( primitive
+      , dedup_dsl_of_primitives dsl.state_type (primitive :: primitives) )
 
 let rewrite_programs cost_tbl version_tbl req s_inv inv (s_p, p) =
   if !compression_verbosity >= 3 then
@@ -211,11 +213,13 @@ let compression_step ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
       Util.time_it "ranked candidates." (fun () ->
           beams_and_costs ~cost_and_version_tbl ~beam_size
             ~inventions:invention_spaces frontier_spaces )
-      |> List.map ~f:(fun (cost, i) ->
+      |> List.filter_map ~f:(fun (cost, i) ->
              let invention = extract_program tbl i in
-             let invented_primitive, expanded_dsl = expand_dsl dsl invention in
-             let size = float_of_int @@ size_of_program invention in
-             ((size, cost), (i, invention, invented_primitive, expanded_dsl)) )
+             expand_dsl dsl invention
+             |> Option.map ~f:(fun (invented_primitive, expanded_dsl) ->
+                    let size = float_of_int @@ size_of_program invention in
+                    ( (size, cost)
+                    , (i, invention, invented_primitive, expanded_dsl) ) ) )
       |> List.sort ~compare:(fun (key_1, _) (key_2, _) ->
              Util.FloatPair.compare key_1 key_2 )
     in
