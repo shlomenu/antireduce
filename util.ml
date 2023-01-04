@@ -51,26 +51,39 @@ let update_progress_bar bar new_progress =
     done
 
 module Yojson_util = struct
-  let yojson_of_hashtbl yojson_of_key yojson_of_val htbl =
-    let coll ~key:k ~data:v acc =
-      `List [yojson_of_key k; yojson_of_val v] :: acc
-    in
-    `List (Hashtbl.fold htbl ~init:[] ~f:coll)
+  let yojson_of_hashtbl yojson_of_key yojson_of_data tbl =
+    `List
+      (Hashtbl.fold tbl ~init:[] ~f:(fun ~key ~data acc ->
+           `List [yojson_of_key key; yojson_of_data data] :: acc ) )
 
-  let hashtbl_of_yojson m key_of_yojson val_of_yojson yojson =
-    match yojson with
+  let hashtbl_of_yojson modl key_of_yojson data_of_yojson = function
     | `List l ->
-        let htbl = Hashtbl.create m in
-        let f = function
-          | `List [k_yojson; v_yojson] ->
-              Hashtbl.add_exn htbl ~key:(key_of_yojson k_yojson)
-                ~data:(val_of_yojson v_yojson)
+        let tbl = Hashtbl.create modl in
+        List.iter l ~f:(function
+          | `List [yojson_key; yojson_data] ->
+              Hashtbl.add_exn tbl ~key:(key_of_yojson yojson_key)
+                ~data:(data_of_yojson yojson_data)
           | _ ->
-              failwith "hashtbl_of_yojson: tuple list needed"
-        in
-        List.iter l ~f ; htbl
+              failwith "hashtbl_of_yojson: length-two list needed" ) ;
+        tbl
     | _ ->
         failwith "hashtbl_of_yojson: list needed"
+
+  let yojson_of_map yojson_of_key yojson_of_data map =
+    `List
+      (Map.fold map ~init:[] ~f:(fun ~key ~data acc ->
+           `List [yojson_of_key key; yojson_of_data data] :: acc ) )
+
+  let map_of_yojson modl key_of_yojson data_of_yojson = function
+    | `List l ->
+        List.fold l ~init:(Map.empty modl) ~f:(fun map -> function
+          | `List [yojson_key; yojson_data] ->
+              Map.add_exn map ~key:(key_of_yojson yojson_key)
+                ~data:(data_of_yojson yojson_data)
+          | _ ->
+              failwith "map_of_yojson: length-two list needed" )
+    | _ ->
+        failwith "map_of_yojson: list needed"
 
   let sub name' value' = function
     | `Assoc attrs ->
