@@ -30,22 +30,11 @@ let rec enumerate_terminal ~max_size dsl env cxt req size =
              Some (Abstraction b, cxt', size') )
   | _ ->
       if size < max_size then
-        let rec go remaining_unified =
-          let i = Random.int @@ List.length remaining_unified in
-          let selected = List.nth_exn remaining_unified i in
-          let unselected =
-            List.filteri remaining_unified ~f:(fun j _ -> j <> i)
-          in
-          match
-            enumerate_parameters ~max_size dsl env selected.context
-              selected.parameters selected.expr (size + 1)
-          with
-          | Some _ as r ->
-              r
-          | None ->
-              if List.is_empty unselected then None else go unselected
-        in
-        go @@ unifying_expressions dsl env req cxt
+        let unified = unifying_expressions dsl env req cxt in
+        let i = Random.int @@ List.length unified in
+        let selected = List.nth_exn unified i in
+        enumerate_parameters ~max_size dsl env selected.context
+          selected.parameters selected.expr (size + 1)
       else None
 
 and enumerate_parameters ~max_size dsl env cxt parameters f size =
