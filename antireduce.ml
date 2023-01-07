@@ -22,34 +22,85 @@ let rec parameters_length_aux dsl len = function
 
 let parameters_length dsl = parameters_length_aux dsl 0
 
-let rec enumerate_terminal ~max_size dsl env cxt req size =
-  match req with
-  | Arrow {left; right; _} ->
-      enumerate_terminal ~max_size dsl (left :: env) cxt right size
-      |> Option.value_map ~default:None ~f:(fun (b, cxt', size') ->
-             Some (Abstraction b, cxt', size') )
-  | _ ->
-      if size < max_size then
-        let unified = unifying_expressions dsl env req cxt in
-        let i = Random.int @@ List.length unified in
-        let selected = List.nth_exn unified i in
-        enumerate_parameters ~max_size dsl env selected.context
-          selected.parameters selected.expr (size + 1)
-      else None
+let choose_random l =
+  if not (List.is_empty l) then
+    let i = Random.int @@ List.length l in
+    let selected, unselected =
+      List.foldi l ~init:(None, []) ~f:(fun j (selected, unselected) elt ->
+          if i = j then (Some elt, unselected) else (selected, elt :: unselected) )
+    in
+    Some (Util.value_exn selected, unselected)
+  else None
 
-and enumerate_parameters ~max_size dsl env cxt parameters f size =
+let rec randomize_list l =
+  choose_random l
+  |> Option.value_map ~default:[] ~f:(fun (selected, unselected) ->
+         selected :: randomize_list unselected )
+
+let rec enumerate_function ~bfs_search_depth ~dfs_search_depth ~n_checkpoints
+    ?(size = 0) ~end_time ~exec dsl env cxt req =
+  if Float.(Core_unix.time () < end_time) then
+    match req with
+    | Arrow {left; right; _} ->
+        enumerate_function ~bfs_search_depth ~dfs_search_depth ~n_checkpoints
+          ~size ~end_time dsl (left :: env) cxt right
+          ~exec:(fun (b, output, cxt', size') ->
+            exec (Abstraction b, output, cxt', size') )
+    | _ ->
+        let enumerate selected =
+          enumerate_arguments ~bfs_search_depth ~dfs_search_depth ~n_checkpoints
+            ~size:(size + 1) ~end_time ~exec dsl env selected.context
+            selected.parameters selected.expr
+        in
+        if size < bfs_search_depth then
+          unifying_expressions dsl env req cxt
+          |> randomize_list
+          |> List.concat_map ~f:enumerate
+        else if size < dfs_search_depth then
+          let try_once unified =
+            choose_random unified
+            |> Option.value_map ~default:[] ~f:(fun (selected, _) ->
+                   enumerate selected )
+          in
+          let rec backtrack unified =
+            choose_random unified
+            |> Option.value_map ~default:[] ~f:(fun (selected, unselected) ->
+                   let found = enumerate selected in
+                   if not (List.is_empty found) then found
+                   else backtrack unselected )
+          in
+          let go =
+            if n_checkpoints = 0 then try_once
+            else if
+              (size - bfs_search_depth)
+              mod max 1 ((dfs_search_depth - bfs_search_depth) / n_checkpoints)
+              = 0
+            then backtrack
+            else try_once
+          in
+          go @@ unifying_expressions dsl env req cxt
+        else []
+  else []
+
+and enumerate_arguments ~bfs_search_depth ~dfs_search_depth ~n_checkpoints ~size
+    ~end_time ~exec dsl env cxt parameters f =
   match parameters with
   | [] ->
-      Some (f, cxt, size)
+      exec (f, None, cxt, size)
   | x_ty :: rest ->
-      if parameters_length dsl parameters > max_size - size then None
+      if
+        Float.(Core_unix.time () >= end_time)
+        || parameters_length dsl parameters > dfs_search_depth - size
+      then []
       else
         let cxt, x_ty = apply_context cxt x_ty in
-        enumerate_terminal ~max_size dsl env cxt x_ty size
-        |> Option.value_map ~default:None ~f:(fun (x, cxt', size') ->
-               enumerate_parameters ~max_size dsl env cxt' rest
-                 (Apply (f, x))
-                 size' )
+        enumerate_function ~bfs_search_depth ~dfs_search_depth ~n_checkpoints
+          ~size ~end_time dsl env cxt x_ty ~exec:(fun (x, _, cxt', size') ->
+            List.concat_map ~f:exec
+            @@ enumerate_arguments ~bfs_search_depth ~dfs_search_depth
+                 ~n_checkpoints ~size:size' ~end_time ~exec:List.return dsl env
+                 cxt' rest
+                 (Apply (f, x)) )
 
 type annotated_expr =
   | AIndex of dc_type * int
@@ -179,9 +230,14 @@ let generic_expr_of_program req p =
   generic_of_annotated @@ apply_context_all cxt ap
 
 let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
-    ~representations_dir ~size ~apply_to_state ~evaluate ~retrieve_result
+    ~representations_dir ~initial_bfs_search_depth ~iterative_deepening
+    ~dfs_search_depth ~n_checkpoints ~apply_to_state ~evaluate ~retrieve_result
     ~nontrivial ~parse ~request ~yojson_of_output ~key_of_output ~yojson_of_key
     ~key_of_yojson key_module =
+  assert (
+    initial_bfs_search_depth >= 0
+    && initial_bfs_search_depth < dfs_search_depth
+    && dfs_search_depth > 0 && n_checkpoints >= 0 ) ;
   if not (equal_dc_type request @@ arrow dsl.state_type dsl.state_type) then
     failwith
       "explore: requested type must be of the form: dsl.state_type -> \
@@ -201,41 +257,52 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
                  failwith "found multiple programs with the same output key" ) ;
            repr )
   in
+  Random.self_init () ;
   let end_time = Core_unix.time () +. exploration_timeout in
-  while not Float.(Core_unix.time () > end_time) do
-    let program_and_output =
-      let open Option.Let_syntax in
-      Random.self_init () ;
-      let%bind p, _, _ =
-        enumerate_terminal ~max_size:size dsl [] empty_type_context request 0
-      in
-      let p_applied = apply_to_state p in
-      let%bind _ =
-        evaluate ~timeout:eval_timeout ~attempts p_applied
-        @@ generic_expr_of_program dsl.state_type p_applied
-      in
-      let o = retrieve_result () in
-      if nontrivial o then Option.return (p, o) else None
-    in
-    Option.value_map program_and_output ~default:() ~f:(fun (p, o) ->
-        Hashtbl.update representations (key_of_output o) ~f:(function
-          | None ->
-              (Some p, None, yojson_of_output o)
-          | Some (None, None, _) ->
-              failwith "unpopulated entry"
-          | Some (None, (Some prev_p as prev_best), o) ->
-              let cur_best =
-                if size_of_program p < size_of_program prev_p then Some p
-                else None
-              in
-              (cur_best, prev_best, o)
-          | Some ((Some cur_p as cur_best), prev_best, o) ->
-              let cur_best =
-                if size_of_program p < size_of_program cur_p then Some p
-                else cur_best
-              in
-              (cur_best, prev_best, o) ) )
-  done ;
+  let rec enumerate ~bfs_search_depth =
+    if
+      Float.(Core_unix.time () < end_time)
+      && bfs_search_depth < dfs_search_depth
+    then (
+      enumerate_function ~bfs_search_depth ~dfs_search_depth ~n_checkpoints
+        ~end_time dsl [] empty_type_context request
+        ~exec:(fun (p, _, cxt, size) ->
+          let s = string_of_program p in
+          Format.eprintf "%s\n" s ;
+          let p_applied = apply_to_state p in
+          generic_expr_of_program dsl.state_type p_applied
+          |> evaluate ~timeout:eval_timeout ~attempts p_applied
+          |> Option.map ~f:retrieve_result
+          |> Option.value_map ~default:[] ~f:(fun o ->
+                 if nontrivial o then [(p, Some o, cxt, size)] else [] ) )
+      |> List.iter ~f:(fun (p, o_opt, _, _) ->
+             let o = Util.value_exn o_opt in
+             Hashtbl.update representations (key_of_output o) ~f:(function
+               | None ->
+                   (Some p, None, yojson_of_output o)
+               | Some (None, None, _) ->
+                   failwith "unpopulated entry"
+               | Some (None, (Some prev_p as prev_best), o) ->
+                   let cur_best =
+                     if size_of_program p < size_of_program prev_p then Some p
+                     else None
+                   in
+                   (cur_best, prev_best, o)
+               | Some ((Some cur_p as cur_best), prev_best, o) ->
+                   let cur_best =
+                     if size_of_program p < size_of_program cur_p then Some p
+                     else cur_best
+                   in
+                   (cur_best, prev_best, o) ) ) ;
+      enumerate
+        ~bfs_search_depth:
+          ( if iterative_deepening then bfs_search_depth + 1
+          else bfs_search_depth ) )
+    else bfs_search_depth
+  in
+  let max_bfs_search_depth =
+    enumerate ~bfs_search_depth:initial_bfs_search_depth
+  in
   let n_new, n_replaced, prev_files, cur_files =
     Hashtbl.fold representations ~init:(0, 0, [], [])
       ~f:(fun ~key ~data (n_new, n_replaced, prev_files, cur_files) ->
@@ -280,7 +347,8 @@ let explore ~exploration_timeout ~eval_timeout ~attempts ~dsl
       [ ("new", `Int n_new)
       ; ("replaced", `Int n_replaced)
       ; ("prev_files", yojson_of_list yojson_of_string prev_files)
-      ; ("cur_files", yojson_of_list yojson_of_string cur_files) ] )
+      ; ("cur_files", yojson_of_list yojson_of_string cur_files)
+      ; ("max_bfs_search_depth", `Int max_bfs_search_depth) ] )
 
 let load_representations_from parse representations_dir frontier =
   Array.filter_map frontier ~f:(fun filename ->
