@@ -1,5 +1,22 @@
 open Core
 
+let value_exn x = Option.value_exn x
+
+let choose_random l =
+  if not (List.is_empty l) then
+    let i = Random.int @@ List.length l in
+    let selected, unselected =
+      List.foldi l ~init:(None, []) ~f:(fun j (selected, unselected) elt ->
+          if i = j then (Some elt, unselected) else (selected, elt :: unselected) )
+    in
+    Some (value_exn selected, unselected)
+  else None
+
+let rec randomize l =
+  choose_random l
+  |> Option.value_map ~default:[] ~f:(fun (selected, unselected) ->
+         selected :: randomize unselected )
+
 let rec unzip3 ?(unzipped = ([], [], [])) = function
   | (x, y, z) :: rest ->
       let xs, ys, zs = unzipped in
@@ -7,9 +24,13 @@ let rec unzip3 ?(unzipped = ([], [], [])) = function
   | [] ->
       unzipped
 
-let value_exn x = Option.value_exn x
-
-let fold1 ~f l = List.fold_right ~init:(List.hd_exn l) ~f (List.tl_exn l)
+(* xs in log space *)
+let logsumexp xs =
+  let xs_exp = List.map xs ~f:exp in
+  let x_max_exp = List.reduce_exn xs_exp ~f:Float.max in
+  x_max_exp
+  +. ( log @@ List.reduce_exn ~f:( +. )
+     @@ List.map xs_exp ~f:(fun x_exp -> exp (x_exp -. x_max_exp)) )
 
 let minimum l ~compare ~key =
   List.map l ~f:(fun x -> (key x, x))

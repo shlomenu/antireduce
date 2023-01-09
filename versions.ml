@@ -684,7 +684,9 @@ let rec minimum_cost_inhabitants ?(given = None) ?(can_be_lambda = true)
                 List.map u
                   ~f:(minimum_cost_inhabitants ~given ~can_be_lambda cost_tbl)
               in
-              let c = Util.fold1 ~f:Float.min @@ List.map children ~f:fst in
+              let c =
+                List.reduce_exn ~f:Float.min @@ List.map children ~f:fst
+              in
               if Util.is_invalid c then (c, [])
               else
                 let children =
@@ -754,7 +756,7 @@ let rec minimal_inhabitant_cost ?(memo = None) ?(given = None)
           | IndexSpace _ | TerminalSpace _ ->
               1.
           | Union u ->
-              Util.fold1 ~f:Float.min
+              List.reduce_exn ~f:Float.min
               @@ List.map u
                    ~f:
                      (minimal_inhabitant_cost ~memo ~given ~can_be_lambda
@@ -925,7 +927,7 @@ let beam_costs ~cost_and_version_tbl ~beam_size inventions frontier =
     List.map frontier ~f:(fun i -> Util.value_exn @@ Array_list.get cache i)
   in
   List.map inventions ~f:(fun invention ->
-      Util.fold1 ~f:( +. )
+      List.reduce_exn ~f:( +. )
       @@ List.map beams ~f:(fun beam ->
              Float.min (arg_cost beam invention) (func_cost beam invention) ) )
 

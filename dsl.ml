@@ -7,26 +7,40 @@ type fast_unifier =
   type_context -> dc_type -> type_context * dc_type list * dc_type
 
 type primitive_entry =
-  {name: string; ty: dc_type; impl: program option; unifier: fast_unifier}
+  { name: string
+  ; ty: dc_type
+  ; impl: program option
+  ; log_likelihood: float
+  ; unifier: fast_unifier }
 
 let yojson_of_primitive_entry ent =
   `Assoc
     [ ("name", yojson_of_string ent.name)
     ; ("ty", yojson_of_dc_type ent.ty)
-    ; ("impl", yojson_of_option yojson_of_program ent.impl) ]
+    ; ("impl", yojson_of_option yojson_of_program ent.impl)
+    ; ("log_likelihood", yojson_of_float ent.log_likelihood) ]
 
 let primitive_entry_of_yojson = function
-  | `Assoc [("name", j_name); ("ty", j_ty); ("impl", j_impl)] ->
+  | `Assoc
+      [ ("name", j_name)
+      ; ("ty", j_ty)
+      ; ("impl", j_impl)
+      ; ("log_likelihood", j_ll) ] ->
       let ty = dc_type_of_yojson j_ty in
       { name= string_of_yojson j_name
       ; ty
       ; impl= option_of_yojson program_of_yojson j_impl
-      ; unifier= make_fast_unifier ty }
+      ; unifier= make_fast_unifier ty
+      ; log_likelihood= float_of_yojson j_ll }
   | _ ->
-      failwith "primitive_entry_of_yojson: invalid JSON"
+      failwith "primitive_entry_of_yojson: invalid json"
 
 type dsl =
-  {library: primitive_entry list; state_type: dc_type; size: int; mass: int}
+  { library: primitive_entry list
+  ; state_type: dc_type
+  ; var_log_likelihood: float
+  ; size: int
+  ; mass: int }
 [@@deriving yojson]
 
 let string_of_dsl dsl =
@@ -37,19 +51,30 @@ let string_of_dsl dsl =
            string_of_dc_type ent.ty ^ "\t" ^ ent.name ) )
 
 let dsl_of_primitives state_type primitives =
+  let size = List.length primitives in
+  let n_primitives = float_of_int size in
   { library=
       List.map primitives ~f:(function
         | Primitive {name; ty} ->
             let unifier = make_fast_unifier ty in
-            {name; ty; impl= None; unifier}
+            { name
+            ; ty
+            ; impl= None
+            ; unifier
+            ; log_likelihood= log (1. /. n_primitives) }
         | Invented (ty, b) ->
             let unifier = make_fast_unifier ty in
-            {name= string_of_program b; ty; impl= Some b; unifier}
+            { name= string_of_program b
+            ; ty
+            ; impl= Some b
+            ; unifier
+            ; log_likelihood= log (1. /. n_primitives) }
         | _ ->
             failwith "dsl_of_primitives: not a base primitive" )
   ; state_type
-  ; size= List.length primitives
-  ; mass= Util.fold1 ~f:( + ) @@ List.map primitives ~f:mass_of_program }
+  ; var_log_likelihood= log 0.5
+  ; size
+  ; mass= List.reduce_exn ~f:( + ) @@ List.map primitives ~f:mass_of_program }
 
 exception DuplicatePrimitive
 
@@ -57,22 +82,30 @@ let dedup_dsl_of_primitives state_type primitives =
   let size =
     List.length @@ List.dedup_and_sort ~compare:compare_program primitives
   in
+  let n_primitives = float_of_int size in
   if List.length primitives = size then
     { library=
         List.map primitives ~f:(function
           | Primitive {name; ty} ->
-              {name; ty; impl= None; unifier= make_fast_unifier ty}
+              { name
+              ; ty
+              ; impl= None
+              ; unifier= make_fast_unifier ty
+              ; log_likelihood= log (1. /. n_primitives) }
           | Invented (ty, b) ->
               { name= string_of_program b
               ; ty
               ; impl= Some b
-              ; unifier= make_fast_unifier ty }
+              ; unifier= make_fast_unifier ty
+              ; log_likelihood= log (1. /. n_primitives) }
           | _ ->
               failwith
                 "dedup_dsl_of_primitives: not a base or invented primitive" )
     ; state_type
+    ; var_log_likelihood= log 0.5
     ; size
-    ; mass= Util.fold1 ~f:( + ) @@ List.map primitives ~f:mass_of_program }
+    ; mass= List.reduce_exn ~f:( + ) @@ List.map primitives ~f:mass_of_program
+    }
   else raise DuplicatePrimitive
 
 let primitive_of_entry ent =
@@ -84,27 +117,32 @@ let primitive_of_entry ent =
 
 let primitives_of_dsl dsl = List.map dsl.library ~f:primitive_of_entry
 
-let prob_under_dsl ?(prob_of_index : float = 0.5) dsl p =
-  if is_index p then prob_of_index
+let log_likelihood_under_dsl dsl p =
+  if is_index p then dsl.var_log_likelihood
   else
     match
-      List.find dsl.library ~f:(fun ent ->
-          equal_program p (primitive_of_entry ent) )
+      List.filter_map dsl.library ~f:(fun ent ->
+          if equal_program p (primitive_of_entry ent) then Some ent else None )
     with
-    | Some _ ->
-        1. /. float_of_int dsl.size
-    | None ->
-        failwith ("prob_under_dsl: missing_primitive " ^ string_of_program p)
-
-let log_prob_under_dsl dsl = Fn.compose log (prob_under_dsl dsl)
+    | [ent] ->
+        ent.log_likelihood
+    | _ :: _ ->
+        failwith
+          ( Format.sprintf "log_likelihood_under_dsl: duplicate_primitive %s"
+          @@ string_of_program p )
+    | [] ->
+        failwith
+          ( Format.sprintf "log_likelihood_under_dsl: missing_primitive %s"
+          @@ string_of_program p )
 
 type unifying_expression =
   { expr: program
   ; parameters: dc_type list
   ; signature: dc_type
-  ; context: type_context }
+  ; context: type_context
+  ; log_likelihood: float }
 
-let unify_environment env req cxt =
+let unify_environment dsl env req cxt =
   List.filter_mapi env ~f:(fun i ty ->
       let context, ty = apply_context cxt ty in
       let terminal_ty = terminal_of_type ty in
@@ -113,27 +151,37 @@ let unify_environment env req cxt =
           let context = unify context terminal_ty req in
           let context, ty = apply_context context ty in
           let parameters = parameters_of_type ty in
-          Some {expr= Index i; parameters; signature= ty; context}
+          Some
+            { expr= Index i
+            ; parameters
+            ; signature= ty
+            ; context
+            ; log_likelihood= dsl.var_log_likelihood }
         with UnificationFailure _ -> None
       else None )
 
 let unifying_indices dsl env req cxt =
-  let unified = unify_environment env req cxt in
-  if equal_dc_type req dsl.state_type then
-    let terminal_indices =
-      List.filter_map unified ~f:(fun ent ->
-          if List.is_empty ent.parameters then Some (int_of_index ent.expr)
-          else None )
-    in
-    if List.is_empty terminal_indices then unified
-    else
-      let min_terminal_index = Util.fold1 ~f:min terminal_indices in
-      List.filter unified ~f:(fun ent ->
-          not
-            ( is_index ent.expr
-            && List.is_empty ent.parameters
-            && int_of_index ent.expr <> min_terminal_index ) )
-  else unified
+  let unified = unify_environment dsl env req cxt in
+  let permitted_unified =
+    if equal_dc_type req dsl.state_type then
+      let terminal_indices =
+        List.filter_map unified ~f:(fun ent ->
+            if List.is_empty ent.parameters then Some (int_of_index ent.expr)
+            else None )
+      in
+      if List.is_empty terminal_indices then unified
+      else
+        let min_terminal_index = List.reduce_exn ~f:min terminal_indices in
+        List.filter unified ~f:(fun ent ->
+            not
+              ( is_index ent.expr
+              && List.is_empty ent.parameters
+              && int_of_index ent.expr <> min_terminal_index ) )
+    else unified
+  in
+  let tot = log @@ Float.of_int @@ List.length permitted_unified in
+  List.map permitted_unified ~f:(fun ent ->
+      {ent with log_likelihood= ent.log_likelihood -. tot} )
 
 let unifying_primitives dsl req cxt =
   List.filter_map dsl.library ~f:(fun ent ->
@@ -141,12 +189,24 @@ let unifying_primitives dsl req cxt =
         let terminal_ty = terminal_of_type ent.ty in
         if might_unify terminal_ty req then
           let context, parameters, signature = ent.unifier cxt req in
-          Some {expr= primitive_of_entry ent; parameters; signature; context}
+          Some
+            { expr= primitive_of_entry ent
+            ; parameters
+            ; signature
+            ; context
+            ; log_likelihood= ent.log_likelihood }
         else None
       with UnificationFailure _ -> None )
 
 let unifying_expressions dsl env req cxt =
-  unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt
+  let unified =
+    unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt
+  in
+  let z =
+    Util.logsumexp @@ List.map unified ~f:(fun ent -> ent.log_likelihood)
+  in
+  List.map unified ~f:(fun ent ->
+      {ent with log_likelihood= ent.log_likelihood -. z} )
 
 type 'a likelihood_factorization =
   { normalizers: ('a list, float) Hashtbl.t
@@ -241,29 +301,24 @@ let record_factor fact used possible =
   let used = if is_index used then Index 0 else used in
   Hashtbl.update fact.uses used ~f:(function Some f -> f +. 1. | None -> 1.) ;
   let possible =
-    if List.exists possible ~f:is_index then
+    ( if List.exists possible ~f:is_index then
       Index 0 :: List.filter possible ~f:(Fn.compose not is_index)
-    else possible
+    else possible )
+    |> List.dedup_and_sort ~compare:compare_program
   in
-  let key = List.dedup_and_sort possible ~compare:compare_program in
-  Hashtbl.update fact.normalizers key ~f:(function
+  Hashtbl.update fact.normalizers possible ~f:(function
     | Some f ->
         f +. 1.
     | None ->
         1. )
 
-let likelihood_of_factorization dsl fact =
-  let prob_of = prob_under_dsl dsl in
+let log_likelihood_of_factorization dsl fact =
+  let ll_of = log_likelihood_under_dsl dsl in
   fact.constant
-  +. Hashtbl.fold fact.uses ~init:0. ~f:(fun ~key ~data log_prob ->
-         log_prob +. (data *. log (prob_of key)) )
-  -. Hashtbl.fold fact.normalizers ~init:0. ~f:(fun ~key ~data log_prob ->
-         let probs = List.map key ~f:prob_of in
-         let max_prob = List.reduce_exn ~f:Float.max probs in
-         let lse =
-           log @@ List.reduce_exn ~f:(fun s a -> s +. exp (a -. max_prob)) probs
-         in
-         log_prob +. (data *. lse) )
+  +. Hashtbl.fold fact.uses ~init:0. ~f:(fun ~key ~data tot ->
+         tot +. (data *. ll_of key) )
+  -. Hashtbl.fold fact.normalizers ~init:0. ~f:(fun ~key ~data tot ->
+         tot +. (data *. (Util.logsumexp @@ List.map key ~f:ll_of)) )
 
 let factorize dsl req p =
   let rec walk_application_tree = function
@@ -274,28 +329,65 @@ let factorize dsl req p =
   in
   let fact = empty_factorization () in
   let cxt_ref = ref empty_type_context in
-  let rec go ty env p' =
+  let rec go env p' ty =
     match ty with
     | Arrow {left; right; _} ->
-        let env = left :: env in
-        let p' = strip_n_abstractions 1 p' in
-        go right env p'
+        go (left :: env) (strip_n_abstractions 1 p') right
     | _ -> (
-        let exprs = unifying_expressions dsl env ty !cxt_ref in
-        match walk_application_tree p' with
-        | [] ->
-            failwith "walk_application_tree"
-        | f :: xs -> (
-          match List.find exprs ~f:(fun {expr; _} -> equal_program expr f) with
+      match walk_application_tree p' with
+      | [] ->
+          failwith "walk_application_tree"
+      | f :: xs -> (
+          let unified = unifying_expressions dsl env ty !cxt_ref in
+          match
+            List.find unified ~f:(fun {expr; _} -> equal_program expr f)
+          with
           | None ->
-              fact.constant <- Float.neg_infinity
+              failwith
+                "primitive type did not unify during likelihood factorization"
           | Some expr ->
               cxt_ref := expr.context ;
-              record_factor fact f @@ List.map exprs ~f:(fun {expr; _} -> expr) ;
-              List.iter (List.zip_exn xs expr.parameters) ~f:(fun (x, x_ty) ->
-                  go x_ty env x ) ) )
+              record_factor fact f
+              @@ List.map unified ~f:(fun {expr; _} -> expr) ;
+              List.iter2_exn xs expr.parameters ~f:(go env) ) )
   in
-  go req [] p ; fact
+  go [] p req ; fact
 
-let likelihood_under_dsl dsl req p =
-  likelihood_of_factorization dsl @@ factorize dsl req p
+let log_likelihood_under_dsl dsl req p =
+  log_likelihood_of_factorization dsl @@ factorize dsl req p
+
+let inside_outside ?(epsilon = 0.001) dsl req frontier =
+  let log_likelihoods, facts =
+    List.map frontier ~f:(fun p ->
+        let fact = factorize dsl req p in
+        (log_likelihood_of_factorization dsl fact, fact) )
+    |> List.unzip
+  in
+  let weighted_fact =
+    let z = Util.logsumexp log_likelihoods in
+    List.map log_likelihoods ~f:(fun ll -> exp (ll -. z))
+    |> Fn.flip List.zip_exn facts |> mix_factorizations
+  in
+  let possible_uses p =
+    Hashtbl.fold ~init:0. weighted_fact.normalizers ~f:(fun ~key ~data c ->
+        if List.mem ~equal:equal_program key p then c +. data else c )
+  in
+  let uses p =
+    Option.value_map ~default:0. ~f:Fn.id @@ Hashtbl.find weighted_fact.uses p
+  in
+  let dsl' =
+    { dsl with
+      var_log_likelihood=
+        log (uses (Index 0) +. epsilon)
+        -. log (possible_uses (Index 0) +. epsilon)
+    ; library=
+        List.map dsl.library ~f:(fun ent ->
+            let prim = primitive_of_entry ent in
+            { ent with
+              log_likelihood=
+                log (uses prim +. epsilon) -. log (possible_uses prim +. epsilon)
+            } ) }
+  in
+  ( dsl'
+  , List.reduce_exn ~f:( +. )
+    @@ List.map facts ~f:(log_likelihood_of_factorization dsl') )
