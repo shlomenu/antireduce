@@ -3,8 +3,7 @@ open Type
 open Program
 open Util.Yojson_util
 
-type fast_unifier =
-  type_context -> dc_type -> type_context * dc_type list * dc_type
+type fast_unifier = type_context -> dc_type -> type_context * dc_type list
 
 type primitive_entry =
   { name: string
@@ -138,27 +137,33 @@ let log_likelihood_under_dsl dsl p =
 type unifying_expression =
   { expr: program
   ; parameters: dc_type list
-  ; signature: dc_type
   ; context: type_context
   ; log_likelihood: float }
 
 let unify_environment dsl env req cxt =
   List.filter_mapi env ~f:(fun i ty ->
       let context, ty = apply_context cxt ty in
-      let terminal_ty = terminal_of_type ty in
-      if might_unify terminal_ty req then
-        try
-          let context = unify context terminal_ty req in
-          let context, ty = apply_context context ty in
-          let parameters = parameters_of_type ty in
-          Some
-            { expr= Index i
-            ; parameters
-            ; signature= ty
-            ; context
-            ; log_likelihood= dsl.var_log_likelihood }
-        with UnificationFailure _ -> None
-      else None )
+      let l_ty, l_req = (list_of_arrows ty, list_of_arrows req) in
+      let size_ty, size_req = (List.length l_ty, List.length l_req) in
+      if size_req > size_ty then None
+      else
+        let terminal_ty =
+          arrows_of_list @@ List.drop l_ty (size_ty - size_req)
+        in
+        if might_unify terminal_ty req then
+          try
+            let context = unify context terminal_ty req in
+            let context, ty = apply_context context ty in
+            let parameters =
+              List.take (list_of_arrows ty) (size_ty - size_req)
+            in
+            Some
+              { expr= Index i
+              ; parameters
+              ; context
+              ; log_likelihood= dsl.var_log_likelihood }
+          with UnificationFailure _ -> None
+        else None )
 
 let unifying_indices dsl env req cxt =
   let unified = unify_environment dsl env req cxt in
@@ -186,27 +191,25 @@ let unifying_indices dsl env req cxt =
 let unifying_primitives dsl req cxt =
   List.filter_map dsl.library ~f:(fun ent ->
       try
-        let terminal_ty = terminal_of_type ent.ty in
-        if might_unify terminal_ty req then
-          let context, parameters, signature = ent.unifier cxt req in
-          Some
-            { expr= primitive_of_entry ent
-            ; parameters
-            ; signature
-            ; context
-            ; log_likelihood= ent.log_likelihood }
-        else None
+        let context, parameters = ent.unifier cxt req in
+        Some
+          { expr= primitive_of_entry ent
+          ; parameters
+          ; context
+          ; log_likelihood= ent.log_likelihood }
       with UnificationFailure _ -> None )
 
 let unifying_expressions dsl env req cxt =
   let unified =
     unifying_indices dsl env req cxt @ unifying_primitives dsl req cxt
   in
-  let z =
-    Util.logsumexp @@ List.map unified ~f:(fun ent -> ent.log_likelihood)
-  in
-  List.map unified ~f:(fun ent ->
-      {ent with log_likelihood= ent.log_likelihood -. z} )
+  if List.is_empty unified then unified
+  else
+    let z =
+      Util.logsumexp @@ List.map unified ~f:(fun ent -> ent.log_likelihood)
+    in
+    List.map unified ~f:(fun ent ->
+        {ent with log_likelihood= ent.log_likelihood -. z} )
 
 type 'a likelihood_factorization =
   { normalizers: ('a list, float) Hashtbl.t

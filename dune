@@ -2,6 +2,16 @@
  (public_name antireduce)
  (name antireduce)
  (libraries core core_unix containers)
+ (modules
+  compression
+  versions
+  exploration
+  frontier
+  dsl
+  parser
+  program
+  type
+  util)
  (preprocess
   (pps ppx_jane ppx_compare ppx_yojson_conv))
  (flags

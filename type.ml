@@ -31,6 +31,14 @@ let rec equal_dc_type ty_a ty_b =
   | _ ->
       false
 
+module DcType = struct
+  type t = dc_type [@@deriving equal, compare, sexp_of]
+
+  include Comparator.Make (struct
+    type t = dc_type [@@deriving equal, compare, sexp_of]
+  end)
+end
+
 let kind name parameters =
   let polymorphic = List.exists parameters ~f:is_polymorphic in
   Constructor {name; parameters; polymorphic}
@@ -370,6 +378,20 @@ let fast_is_polymorphic = function
   | FId {contents= ty} ->
       Option.value_map ty ~default:true ~f:is_polymorphic
 
+let rec list_of_fast_arrows = function
+  | FArrow {left; right; polymorphic} ->
+      (left, polymorphic) :: list_of_fast_arrows right
+  | ty ->
+      [(ty, None)]
+
+let rec fast_arrow_of_list = function
+  | [(last, None)] ->
+      last
+  | (left, polymorphic) :: right ->
+      FArrow {left; right= fast_arrow_of_list right; polymorphic}
+  | [] ->
+      failwith "arrows_of_list: cannot create type from empty list"
+
 let fast_of_slow ty =
   let ty = canonical_type ty in
   let next_id = next_type_var ty in
@@ -447,22 +469,27 @@ let rec fast_unify cxt fast_ty ty =
 
 let make_fast_unifier ty =
   let fast_ty, types = fast_of_slow ty in
-  let terminal_fast_ty = terminal_of_fast fast_ty in
-  let parameters_fast_ty = parameters_of_fast fast_ty in
   fun cxt req ->
+    let l_req = list_of_arrows req in
+    let l_fast_ty = list_of_fast_arrows fast_ty in
+    let size_req = List.length l_req in
+    let size_fast_ty = List.length l_fast_ty in
+    if size_fast_ty < size_req then
+      raise
+        (UnificationFailure
+           (Format.sprintf "%s does not unify with %s" (string_of_dc_type req)
+              (string_of_dc_type ty) ) ) ;
+    let parameters_fast_ty, l_terminal_fast_ty =
+      List.split_n l_fast_ty (size_fast_ty - size_req)
+    in
+    let parameters_fast_ty = List.map parameters_fast_ty ~f:fst in
+    let terminal_fast_ty = fast_arrow_of_list l_terminal_fast_ty in
     let cxt = fast_unify cxt terminal_fast_ty req in
     let next_id = cxt.next_id in
     let next_id_ref = ref next_id in
-    let terminal = slow_of_fast next_id_ref terminal_fast_ty in
     let parameters =
       List.map parameters_fast_ty ~f:(slow_of_fast next_id_ref)
     in
-    let rec go = function
-      | left :: rest ->
-          arrow left @@ go rest
-      | [] ->
-          terminal
-    in
     let cxt = snd @@ make_type_ids (!next_id_ref - next_id) cxt in
     Array.iter types ~f:(fun ty_opt -> ty_opt := None) ;
-    (cxt, parameters, go parameters)
+    (cxt, parameters)

@@ -13,7 +13,11 @@ type program =
 [@@deriving yojson, equal, compare, sexp_of, hash]
 
 module Program = struct
-  type t = program [@@deriving compare, sexp_of, hash]
+  type t = program [@@deriving equal, compare, sexp_of, hash]
+
+  include Comparator.Make (struct
+    type t = program [@@deriving equal, compare, sexp_of, hash]
+  end)
 end
 
 let is_index = function Index _ -> true | _ -> false
