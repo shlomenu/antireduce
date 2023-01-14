@@ -41,7 +41,7 @@ let eta_expansion req p =
             match f with
             | Index i ->
                 apply_context_ref cxt_ref @@ List.nth_exn env i
-            | Primitive {ty; _} | Invented (ty, _) ->
+            | Primitive {ty; _} | Invented {ty; _} ->
                 instantiate_type_ref cxt_ref ty
             | Abstraction _ | Apply _ ->
                 failwith
@@ -67,7 +67,7 @@ let eta_expansion req p =
       (canonical_type @@ closed_inference p') ) ;
   p'
 
-let normalize_invention i =
+let normalize_invention name i =
   let m =
     free_variables i
     |> List.dedup_and_sort ~compare:( - )
@@ -85,9 +85,10 @@ let normalize_invention i =
     | (Primitive _ | Invented _) as p ->
         p
   in
-  invention @@ List.fold_right m ~init:(go 0 i) ~f:(fun _ e -> Abstraction e)
+  invention name
+  @@ List.fold_right m ~init:(go 0 i) ~f:(fun _ e -> Abstraction e)
 
-let refactor i req e =
+let refactor invention_name i req e =
   let m =
     free_variables i
     |> List.dedup_and_sort ~compare:( - )
@@ -95,7 +96,7 @@ let refactor i req e =
   in
   let applied_invention =
     List.range 0 (List.length m)
-    |> List.fold ~init:(normalize_invention i) ~f:(fun e j ->
+    |> List.fold ~init:(normalize_invention invention_name i) ~f:(fun e j ->
            Apply (e, Index (List.Assoc.find_exn ~equal m j)) )
   in
   let rec go = function
@@ -163,7 +164,7 @@ let incorporate_programs ~n_beta_inversions ~inlining version_tbl ps =
           n_step_inversion ~inlining version_tbl ~n:n_beta_inversions
           @@ incorporate version_tbl p ) )
 
-let extract_inventions version_tbl cost_tbl spaces =
+let extract_inventions invention_name version_tbl cost_tbl spaces =
   Util.time_it "proposed refactorings.." (fun () ->
       reachable_versions version_tbl spaces
       |> List.concat_map ~f:(fun s ->
@@ -174,12 +175,12 @@ let extract_inventions version_tbl cost_tbl spaces =
       |> List.filter ~f:(fun s ->
              let p = extract_program version_tbl s in
              try
-               ignore (normalize_invention p : program) ;
+               ignore (normalize_invention invention_name p : program) ;
                nontrivial p
              with UnificationFailure _ -> false ) )
 
-let expand_dsl dsl invention =
-  let primitive = normalize_invention invention in
+let expand_dsl invention_name dsl invention =
+  let primitive = normalize_invention invention_name invention in
   let primitives = primitives_of_dsl dsl in
   if List.mem ~equal:equal_program primitives primitive then None
   else
@@ -187,7 +188,8 @@ let expand_dsl dsl invention =
       ( primitive
       , dedup_dsl_of_primitives dsl.state_type (primitive :: primitives) )
 
-let rewrite_programs cost_tbl version_tbl req s_inv inv (s_p, p) =
+let rewrite_programs invention_name cost_tbl version_tbl req s_inv inv (s_p, p)
+    =
   if !compression_verbosity >= 3 then
     Format.eprintf "rewriting program.. %s\n" (string_of_program p) ;
   let p' =
@@ -198,18 +200,28 @@ let rewrite_programs cost_tbl version_tbl req s_inv inv (s_p, p) =
       @@ string_of_program
       @@ extract_program version_tbl s_p
   in
-  try refactor inv req p' with EtaExpandFailure -> p
+  try refactor invention_name inv req p' with EtaExpandFailure -> p
 
-let compression_step ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
-    ~n_exactly_scored ~primitive_size_penalty ~dsl_size_penalty ~request ~dsl
-    ~frontier =
+let compression_step ~invention_name_prefix ~inlining ~n_beta_inversions
+    ~beam_size ~n_invention_sizes ~n_exactly_scored ~primitive_size_penalty
+    ~dsl_size_penalty ~request ~dsl ~frontier =
   let tbl = new_version_tbl () in
   let cost_and_version_tbl = empty_cost_and_version_tbl tbl in
   let frontier_spaces =
     incorporate_programs ~n_beta_inversions ~inlining tbl frontier
   in
+  let invention_name =
+    match primitive_of_entry @@ List.hd_exn dsl.library with
+    | Invented {name; _} ->
+        let splits = String.split name ~on:'_' in
+        let init, last = List.split_n splits (List.length splits - 1) in
+        String.concat init ~sep:"_"
+        ^ "_" ^ Int.to_string @@ ( + ) 1 @@ Int.of_string @@ List.hd_exn last
+    | _ ->
+        invention_name_prefix ^ "_0"
+  in
   let invention_spaces =
-    extract_inventions tbl cost_and_version_tbl frontier_spaces
+    extract_inventions invention_name tbl cost_and_version_tbl frontier_spaces
   in
   Printf.eprintf "Got %d candidates.\n" (List.length invention_spaces) ;
   if List.is_empty invention_spaces then None
@@ -220,7 +232,7 @@ let compression_step ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
             ~inventions:invention_spaces frontier_spaces )
       |> List.filter_map ~f:(fun (cost, i) ->
              let invention = extract_program tbl i in
-             expand_dsl dsl invention
+             expand_dsl invention_name dsl invention
              |> Option.map ~f:(fun (invented_primitive, expanded_dsl) ->
                     ( (float_of_int @@ size_of_program invention, cost)
                     , (i, invention, invented_primitive, expanded_dsl) ) ) )
@@ -264,7 +276,9 @@ let compression_step ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
              let rewritten_frontier =
                List.zip_exn frontier_spaces frontier
                |> List.map
-                    ~f:(rewrite_programs cost_tbl tbl request i invention)
+                    ~f:
+                      (rewrite_programs invention_name cost_tbl tbl request i
+                         invention )
              in
              let reweighted_expanded_dsl, log_likelihood_of_frontier =
                inside_outside expanded_dsl request rewritten_frontier
@@ -315,8 +329,8 @@ let compression_step ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
       Some (best_expanded_dsl, best_rewritten_frontier)
     else None
 
-let export_compression_checkpoint ~n_beta_inversions ~beam_size
-    ~n_invention_sizes ~n_exactly_scored ~primitive_size_penalty
+let export_compression_checkpoint ~invention_name_prefix ~n_beta_inversions
+    ~beam_size ~n_invention_sizes ~n_exactly_scored ~primitive_size_penalty
     ~dsl_size_penalty ~dsl ~frontier =
   let ts = Time.to_filename_string ~zone:Time.Zone.utc @@ Time.now () in
   let filename = Printf.sprintf "compression_messages/%s" ts in
@@ -324,15 +338,17 @@ let export_compression_checkpoint ~n_beta_inversions ~beam_size
     `Assoc
       [ ("dsl", yojson_of_dsl dsl)
       ; ("n_invention_sizes", yojson_of_option yojson_of_int n_invention_sizes)
-      ; ("n_exactly_scored", `Int n_exactly_scored)
-      ; ("primitive_size_penalty", `Float primitive_size_penalty)
-      ; ("dsl_size_penalty", `Float dsl_size_penalty)
-      ; ("beam_size", `Int beam_size)
-      ; ("n_beta_inversions", `Int n_beta_inversions)
-      ; ("verbose", `Bool true)
+      ; ("n_exactly_scored", yojson_of_int n_exactly_scored)
+      ; ("primitive_size_penalty", yojson_of_float primitive_size_penalty)
+      ; ("dsl_size_penalty", yojson_of_float dsl_size_penalty)
+      ; ("beam_size", yojson_of_int beam_size)
+      ; ("n_beta_inversions", yojson_of_int n_beta_inversions)
+      ; ("verbose", yojson_of_bool true)
+      ; ("invention_name_prefix", yojson_of_string invention_name_prefix)
       ; ( "frontier"
-        , `List (List.map frontier ~f:(fun p -> `String (string_of_program p)))
-        ) ]
+        , `List
+            (List.map frontier ~f:(fun p ->
+                 yojson_of_string (string_of_program p) ) ) ) ]
   in
   Yojson.Safe.to_file filename j ;
   Printf.eprintf "Exported compression checkpoint to %s\n" filename
@@ -365,17 +381,17 @@ let find_new_primitive dsl dsl' =
       failwith
         "multiple new primitives after single successful compression iteration"
 
-let compress ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
-    ~n_exactly_scored ~primitive_size_penalty ~dsl_size_penalty ~iterations
-    ~request ~dsl ~frontier =
+let compress ~invention_name_prefix ~inlining ~n_beta_inversions ~beam_size
+    ~n_invention_sizes ~n_exactly_scored ~primitive_size_penalty
+    ~dsl_size_penalty ~iterations ~request ~dsl ~frontier =
   assert (n_exactly_scored > 0) ;
   let rec go ~iterations dsl frontier =
     if iterations > 0 then (
       match
         Util.time_it "Completed one step of memory consolidation" (fun () ->
-            compression_step ~inlining ~n_beta_inversions ~beam_size
-              ~n_invention_sizes ~n_exactly_scored ~primitive_size_penalty
-              ~dsl_size_penalty ~request ~dsl ~frontier )
+            compression_step ~invention_name_prefix ~inlining ~n_beta_inversions
+              ~beam_size ~n_invention_sizes ~n_exactly_scored
+              ~primitive_size_penalty ~dsl_size_penalty ~request ~dsl ~frontier )
       with
       | None ->
           (dsl, frontier)
@@ -383,9 +399,10 @@ let compress ~inlining ~n_beta_inversions ~beam_size ~n_invention_sizes
           if !compression_verbosity >= 1 then
             illustrate_primitive_usage (find_new_primitive dsl dsl') frontier' ;
           if !compression_verbosity >= 4 && iterations > 1 then
-            export_compression_checkpoint ~n_beta_inversions ~beam_size
-              ~n_invention_sizes ~n_exactly_scored ~primitive_size_penalty
-              ~dsl_size_penalty ~dsl:dsl' ~frontier:frontier' ;
+            export_compression_checkpoint ~invention_name_prefix
+              ~n_beta_inversions ~beam_size ~n_invention_sizes ~n_exactly_scored
+              ~primitive_size_penalty ~dsl_size_penalty ~dsl:dsl'
+              ~frontier:frontier' ;
           Util.flush_all () ;
           go ~iterations:(iterations - 1) dsl' frontier' )
     else (dsl, frontier)

@@ -274,8 +274,9 @@ let replacements ~representations_dir ~yojson_of_key =
             Filename.concat representations_dir
             @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex @@ Md5.digest_string s
           in
-          let cur_ps = string_of_program cur_p in
-          let cur_path = path_of cur_ps in
+          let cur_path =
+            path_of @@ string_of_program ~format:`Dreamcoder cur_p
+          in
           let n_new', n_replaced', replacements' =
             match prev_best with
             | Some prev_p ->
@@ -290,10 +291,13 @@ let replacements ~representations_dir ~yojson_of_key =
           in
           S.to_file cur_path
           @@ `Assoc
-               [ ("program", `String cur_ps)
-               ; ("size", `Int (size_of_program cur_p))
+               [ ("program", yojson_of_string @@ string_of_program cur_p)
+               ; ( "stitch_program"
+                 , yojson_of_string @@ string_of_program ~format:`Stitch cur_p
+                 )
+               ; ("size", yojson_of_int (size_of_program cur_p))
                ; ( "mass"
-                 , `Int
+                 , yojson_of_int
                      ( mass_of_program
                      @@ beta_normal_form ~reduce_invented:true cur_p ) )
                ; ("output", o_save)

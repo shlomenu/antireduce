@@ -4,12 +4,18 @@ open Type
 type primitive = {name: string; ty: dc_type}
 [@@deriving yojson, equal, compare, sexp_of, hash]
 
-type program =
+type invention =
+  { name: string [@ignore.equal] [@ignore.compare]
+  ; ty: dc_type [@ignore.equal] [@ignore.compare]
+  ; body: program }
+[@@deriving yojson, equal, compare, sexp_of, hash]
+
+and program =
   | Index of int
   | Abstraction of program
   | Apply of program * program
   | Primitive of primitive
-  | Invented of (dc_type[@equal.ignore] [@compare.ignore]) * program
+  | Invented of invention
 [@@deriving yojson, equal, compare, sexp_of, hash]
 
 module Program = struct
@@ -79,26 +85,39 @@ let rec mass_of_program = function
       mass_of_program b
   | Index _ | Primitive _ ->
       1
-  | Invented (_, b) ->
-      mass_of_program b
+  | Invented {body; _} ->
+      mass_of_program body
 
 let rec subexpressions p =
   let subexprs = List.map (child_programs p) ~f:subexpressions |> List.concat in
   p :: subexprs
 
-let string_of_program : program -> string =
+let string_of_program
+    ?(format : [`Stitch | `Dreamcoder | `Combined] = `Combined) :
+    program -> string =
   let rec go parenthesized = function
     | Index j ->
         "$" ^ string_of_int j
-    | Abstraction b ->
-        "(lambda " ^ go true b ^ ")"
+    | Abstraction b -> (
+        let body = go true b in
+        match format with
+        | `Stitch | `Combined ->
+            "(lam " ^ body ^ ")"
+        | `Dreamcoder ->
+            "(lambda " ^ body ^ ")" )
     | Apply (f, x) ->
         let body = go false f ^ " " ^ go true x in
         if parenthesized then "(" ^ body ^ ")" else body
     | Primitive {name; _} ->
         name
-    | Invented (_, b) ->
-        "#" ^ go true b
+    | Invented {name; body; _} -> (
+      match format with
+      | `Stitch ->
+          name
+      | `Dreamcoder ->
+          "#" ^ go true body
+      | `Combined ->
+          "{" ^ name ^ "}" ^ go true body )
   in
   go true
 
@@ -113,7 +132,7 @@ exception UnboundVariable
 let rec infer_type cxt env = function
   | Index i ->
       apply_context cxt @@ List.nth_exn env i
-  | Primitive {ty; _} | Invented (ty, _) ->
+  | Primitive {ty; _} | Invented {ty; _} ->
       instantiate_type cxt ty
   | Abstraction b ->
       let parameter_ty, cxt = make_type_id cxt in
@@ -128,9 +147,9 @@ let rec infer_type cxt env = function
 
 let closed_inference p : dc_type = snd @@ infer_type empty_type_context [] p
 
-let invention b =
-  let ty = canonical_type @@ closed_inference b in
-  Invented (ty, b)
+let invention name body =
+  let ty = canonical_type @@ closed_inference body in
+  Invented {name; ty; body}
 
 let rec make_app_n ?(c = 0) p n =
   if c = n then
@@ -156,8 +175,8 @@ let rec index_is_bound ?(i = 0) = function
       j = i
   | Apply (f, x) ->
       index_is_bound ~i f || index_is_bound ~i x
-  | Invented (_, b) ->
-      index_is_bound ~i b
+  | Invented {body; _} ->
+      index_is_bound ~i body
   | Primitive _ ->
       false
   | Abstraction b ->
@@ -207,8 +226,8 @@ let rec beta_normal_form ?(reduce_invented = false) p =
   let rec step = function
     | Abstraction b -> (
       match step b with Some b' -> Some (Abstraction b') | None -> None )
-    | Invented (_, b) when reduce_invented ->
-        Some b
+    | Invented {body; _} when reduce_invented ->
+        Some body
     | Apply (f, x) -> (
       match step f with
       | Some f' ->
@@ -271,8 +290,8 @@ let rec instantiate_all cxt env = function
   | Primitive {name; ty} ->
       let cxt, ty = instantiate_type cxt ty in
       (cxt, ty, APrimitive (ty, name))
-  | Invented (_, b) ->
-      instantiate_all cxt [] b
+  | Invented {body; _} ->
+      instantiate_all cxt [] body
   | Abstraction b ->
       let parameter_type, cxt = make_type_id cxt in
       let cxt, terminal_type, b' =

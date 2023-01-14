@@ -79,20 +79,25 @@ let variable =
   %% fun _ -> number %% fun n -> inject @@ Index (Int.of_string n)
 
 let rec invented primitives =
-  constant_parser "#"
+  constant_parser "{"
+  %% fun _ ->
+  token
+  %% fun name ->
+  constant_parser "}"
   %% fun _ ->
   program_parser primitives
-  %% fun p ->
+  %% fun body ->
   let ty =
-    try closed_inference p
+    try closed_inference body
     with e ->
-      Printf.printf "Could not type check invented %s\n" (string_of_program p) ;
+      Printf.printf "Could not type check invented %s\n"
+        (string_of_program body) ;
       raise e
   in
-  inject (Invented (ty, p))
+  inject (Invented {name; ty; body})
 
 and abstraction primitives =
-  constant_parser "(lambda"
+  (constant_parser "(lambda" <|> constant_parser "(lam")
   %% fun _ ->
   ( whitespace
   %% fun _ ->

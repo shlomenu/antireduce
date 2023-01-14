@@ -6,7 +6,8 @@ open Util.Yojson_util
 type fast_unifier = type_context -> dc_type -> type_context * dc_type list
 
 type primitive_entry =
-  { name: string
+  { dc_name: string
+  ; stitch_name: string
   ; ty: dc_type
   ; impl: program option
   ; log_likelihood: float
@@ -14,19 +15,22 @@ type primitive_entry =
 
 let yojson_of_primitive_entry ent =
   `Assoc
-    [ ("name", yojson_of_string ent.name)
+    [ ("dc_name", yojson_of_string ent.dc_name)
+    ; ("stitch_name", yojson_of_string ent.stitch_name)
     ; ("ty", yojson_of_dc_type ent.ty)
     ; ("impl", yojson_of_option yojson_of_program ent.impl)
     ; ("log_likelihood", yojson_of_float ent.log_likelihood) ]
 
 let primitive_entry_of_yojson = function
   | `Assoc
-      [ ("name", j_name)
+      [ ("dc_name", j_dc_name)
+      ; ("stitch_name", j_stitch_name)
       ; ("ty", j_ty)
       ; ("impl", j_impl)
       ; ("log_likelihood", j_ll) ] ->
       let ty = dc_type_of_yojson j_ty in
-      { name= string_of_yojson j_name
+      { dc_name= string_of_yojson j_dc_name
+      ; stitch_name= string_of_yojson j_stitch_name
       ; ty
       ; impl= option_of_yojson program_of_yojson j_impl
       ; unifier= make_fast_unifier ty
@@ -47,7 +51,7 @@ let string_of_dsl dsl =
   ^ "\tt0\t$_\n"
   ^ String.concat ~sep:"\n"
       (List.map dsl.library ~f:(fun ent ->
-           string_of_dc_type ent.ty ^ "\t" ^ ent.name ) )
+           string_of_dc_type ent.ty ^ "\t" ^ ent.dc_name ) )
 
 let dsl_of_primitives state_type primitives =
   let size = List.length primitives in
@@ -55,18 +59,18 @@ let dsl_of_primitives state_type primitives =
   { library=
       List.map primitives ~f:(function
         | Primitive {name; ty} ->
-            let unifier = make_fast_unifier ty in
-            { name
+            { dc_name= name
+            ; stitch_name= name
             ; ty
             ; impl= None
-            ; unifier
+            ; unifier= make_fast_unifier ty
             ; log_likelihood= log (1. /. n_primitives) }
-        | Invented (ty, b) ->
-            let unifier = make_fast_unifier ty in
-            { name= string_of_program b
+        | Invented {name; ty; body} ->
+            { dc_name= string_of_program body
+            ; stitch_name= name
             ; ty
-            ; impl= Some b
-            ; unifier
+            ; impl= Some body
+            ; unifier= make_fast_unifier ty
             ; log_likelihood= log (1. /. n_primitives) }
         | _ ->
             failwith "dsl_of_primitives: not a base primitive" )
@@ -86,15 +90,17 @@ let dedup_dsl_of_primitives state_type primitives =
     { library=
         List.map primitives ~f:(function
           | Primitive {name; ty} ->
-              { name
+              { dc_name= name
+              ; stitch_name= name
               ; ty
               ; impl= None
               ; unifier= make_fast_unifier ty
               ; log_likelihood= log (1. /. n_primitives) }
-          | Invented (ty, b) ->
-              { name= string_of_program b
+          | Invented {name; ty; body} ->
+              { dc_name= string_of_program body
+              ; stitch_name= name
               ; ty
-              ; impl= Some b
+              ; impl= Some body
               ; unifier= make_fast_unifier ty
               ; log_likelihood= log (1. /. n_primitives) }
           | _ ->
@@ -110,9 +116,9 @@ let dedup_dsl_of_primitives state_type primitives =
 let primitive_of_entry ent =
   match ent.impl with
   | None ->
-      Primitive {name= ent.name; ty= ent.ty}
-  | Some b ->
-      Invented (ent.ty, b)
+      Primitive {name= ent.dc_name; ty= ent.ty}
+  | Some body ->
+      Invented {name= ent.stitch_name; ty= ent.ty; body}
 
 let primitives_of_dsl dsl = List.map dsl.library ~f:primitive_of_entry
 

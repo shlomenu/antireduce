@@ -317,7 +317,7 @@ let inline tbl =
         union tbl @@ List.map u ~f:(go args)
     | ApplySpace (f, x) ->
         go (x :: args) f
-    | TerminalSpace (Invented (_, b)) ->
+    | TerminalSpace (Invented {body; _}) ->
         let rec make_substitution env unused b =
           match (unused, b) with
           | [], Abstraction _ ->
@@ -345,7 +345,7 @@ let inline tbl =
           | (Primitive _ | Invented _) as p ->
               incorporate tbl p
         in
-        make_substitution [] args b
+        make_substitution [] args body
         |> Option.value_map ~default:tbl.void ~f:(fun (env, b) ->
                let f = apply_substitution ~k:0 env b in
                let unused = List.drop args @@ List.length env in
