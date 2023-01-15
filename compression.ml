@@ -111,10 +111,17 @@ let refactor invention_name i req e =
   in
   try
     let e' = eta_expansion req @@ go e in
-    assert (
-      equal_program
-        (beta_normal_form ~reduce_invented:true e)
-        (beta_normal_form ~reduce_invented:true e') ) ;
+    let e_reduced = beta_normal_form ~reduce_invented:true e in
+    let e_reduced' = beta_normal_form ~reduce_invented:true e' in
+    if not (equal_program e_reduced e_reduced') then
+      failwith
+      @@ Format.sprintf
+           "program semantics were modified by use of new primitive:\n\
+            %s\n\
+            \t-/->\n\
+            %s\n"
+           (string_of_program e_reduced)
+           (string_of_program e_reduced') ;
     e'
   with UnificationFailure _ ->
     if !compression_verbosity >= 4 then (
