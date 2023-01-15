@@ -270,17 +270,12 @@ let replacements ~representations_dir ~yojson_of_key =
       | None, Some _, _ ->
           cur
       | Some cur_p, prev_best, o_save ->
-          let path_of s =
-            Filename.concat representations_dir
-            @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex @@ Md5.digest_string s
-          in
-          let cur_path =
-            path_of @@ string_of_program ~format:`Dreamcoder cur_p
-          in
+          let path_of = Frontier.repr_path representations_dir in
+          let cur_path = path_of cur_p in
           let n_new', n_replaced', replacements' =
             match prev_best with
             | Some prev_p ->
-                let prev_path = path_of @@ string_of_program prev_p in
+                let prev_path = path_of prev_p in
                 Caml.Sys.remove prev_path ;
                 ( n_new
                 , n_replaced + 1

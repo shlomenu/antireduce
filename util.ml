@@ -17,13 +17,6 @@ let rec randomize l =
   |> Option.value_map ~default:[] ~f:(fun (selected, unselected) ->
          selected :: randomize unselected )
 
-let rec unzip3 ?(unzipped = ([], [], [])) = function
-  | (x, y, z) :: rest ->
-      let xs, ys, zs = unzipped in
-      unzip3 ~unzipped:(x :: xs, y :: ys, z :: zs) rest
-  | [] ->
-      unzipped
-
 (* xs in log space *)
 let logsumexp xs =
   let xs_exp = List.map xs ~f:exp in

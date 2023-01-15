@@ -4,11 +4,16 @@ module S = Yojson.Safe
 module SU = Yojson.Safe.Util
 
 let load_representations_from parse representations_dir frontier =
-  Array.filter_map frontier ~f:(fun filename ->
+  List.map frontier ~f:(fun filename ->
       let path = Filename.concat representations_dir filename in
       let j = S.from_file path in
-      Some (parse @@ SU.to_string @@ SU.member "program" j, path, j) )
-  |> Array.to_list |> Util.unzip3
+      (parse @@ SU.to_string @@ SU.member "program" j, path, j) )
+  |> List.unzip3
+
+let repr_path dir p =
+  Filename.concat dir @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex
+  @@ Md5.digest_string
+  @@ string_of_program ~format:`Dreamcoder p
 
 let overwrite_representations programs' paths file_contents =
   List.zip_exn programs' file_contents
@@ -22,9 +27,7 @@ let overwrite_representations programs' paths file_contents =
   |> snd
   |> List.map ~f:(fun (path, program', file_content) ->
          ( path
-         , Filename.concat (Filename.dirname path)
-           @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex @@ Md5.digest_string
-           @@ string_of_program program'
+         , repr_path (Filename.dirname path) program'
          , Util.Yojson_util.sub "program"
              (`String (string_of_program program'))
              file_content
