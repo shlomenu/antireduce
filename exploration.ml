@@ -307,7 +307,7 @@ let enumerate_until_timeout ~timeout ~process_program deriv cache =
     if Float.(Core_unix.time () < end_time) then (
       let deriv_next, cache'' = query_heaps deriv_cur cache' in
       let p_next = program_of_derivation deriv_next in
-      if Float.(deriv_next.log_likelihood >= deriv_cur.log_likelihood) then
+      if Float.(deriv_next.log_likelihood > deriv_cur.log_likelihood) then
         failwith
         @@ Format.sprintf
              "explore: heap search returned programs in nondecreasing order of \
