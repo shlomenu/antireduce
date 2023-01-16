@@ -2,6 +2,54 @@ open Core
 open Type
 open Program
 
+type stitch_program =
+  | SIndex of int
+  | SParam of int
+  | SAbstraction of stitch_program
+  | SApply of stitch_program * stitch_program
+  | SPrimitive of primitive
+  | SInvented of invention
+
+let rec arity_of_stitch_program = function
+  | SIndex _ ->
+      0
+  | SAbstraction b ->
+      arity_of_stitch_program b
+  | SApply (f, x) ->
+      max (arity_of_stitch_program f) (arity_of_stitch_program x)
+  | SPrimitive _ ->
+      0
+  | SInvented _ ->
+      0
+  | SParam i ->
+      i + 1
+
+let program_of_stitch_invention_body stitch_inv =
+  let m =
+    List.range ~start:`exclusive ~stop:`inclusive ~stride:(-1)
+      (arity_of_stitch_program stitch_inv)
+      0
+    |> List.mapi ~f:(fun k v -> (v, k))
+  in
+  let rec go d = function
+    | SIndex j ->
+        Index j
+    | SAbstraction b ->
+        Abstraction (go (d + 1) b)
+    | SApply (f, x) ->
+        Apply (go d f, go d x)
+    | SPrimitive prim ->
+        Primitive prim
+    | SInvented inv ->
+        Invented inv
+    | SParam j ->
+        Index (d + List.Assoc.find_exn ~equal m j)
+  in
+  List.fold_right m ~init:(go 0 stitch_inv) ~f:(fun _ e -> Abstraction e)
+
+let rec wrap_stitch_abstractions n e =
+  if n > 0 then wrap_stitch_abstractions (n - 1) (SAbstraction e) else e
+
 type 'a parser = string * int -> ('a * int) list
 
 let inject (x : 'a) : 'a parser = fun (_, n) -> [(x, n)]
@@ -64,75 +112,88 @@ let whitespace = token_parser ~can_be_empty:true Char.is_whitespace
 
 let number = token_parser Char.is_digit
 
-let primitive_parser (primitives : (string, program) Hashtbl.t) : program parser
-    =
+let primitive_parser lookup_name : 'a parser =
   token
   %% fun name ->
-  match Hashtbl.find primitives name with
-  | Some prim ->
-      inject prim
-  | None ->
-      fail
+  Option.value_map ~default:fail ~f:(fun prim -> inject prim)
+  @@ lookup_name name
 
-let variable =
-  constant_parser "$"
-  %% fun _ -> number %% fun n -> inject @@ Index (Int.of_string n)
+let variable make_index =
+  constant_parser "$" %% fun _ -> number %% fun n -> inject @@ make_index n
 
-let rec invented primitives =
+let parameter make_parameter =
+  constant_parser "#" %% fun _ -> number %% fun n -> inject @@ make_parameter n
+
+let rec invented make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name =
   constant_parser "{"
   %% fun _ ->
   token
   %% fun name ->
   constant_parser "}"
   %% fun _ ->
-  program_parser primitives
+  program_parser make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name
   %% fun body ->
-  let ty =
-    try closed_inference body
-    with e ->
-      Printf.printf "Could not type check invented %s\n"
-        (string_of_program body) ;
-      raise e
-  in
-  inject (Invented {name; ty; body})
+  let ty = infer_type body in
+  inject @@ make_invention name ty body
 
-and abstraction primitives =
+and abstraction make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name =
   (constant_parser "(lambda" <|> constant_parser "(lam")
   %% fun _ ->
   ( whitespace
   %% fun _ ->
-  program_parser primitives
-  %% fun b -> constant_parser ")" %% fun _ -> inject (Abstraction b) )
+  program_parser make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name
+  %% fun b -> constant_parser ")" %% fun _ -> inject @@ make_abstraction b )
   <|> number
       %% fun n ->
       whitespace
       %% fun _ ->
-      program_parser primitives
+      program_parser make_apply make_index make_parameter make_invention
+        infer_type make_abstraction make_n_abstractions lookup_name
       %% fun b ->
-      constant_parser ")"
-      %% fun _ -> inject (wrap_abstractions (Int.of_string n) b)
+      constant_parser ")" %% fun _ -> inject @@ make_n_abstractions n b
 
-and applications primitives (f_opt : program option) =
+and applications make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name f_opt =
   whitespace
   %% fun _ ->
   match f_opt with
   | None ->
-      program_parser primitives %% fun f -> applications primitives (Some f)
+      program_parser make_apply make_index make_parameter make_invention
+        infer_type make_abstraction make_n_abstractions lookup_name
+      %% fun f ->
+      applications make_apply make_index make_parameter make_invention
+        infer_type make_abstraction make_n_abstractions lookup_name (Some f)
   | Some f ->
       inject f
-      <|> program_parser primitives
-          %% fun x -> applications primitives (Some (Apply (f, x)))
+      <|> program_parser make_apply make_index make_parameter make_invention
+            infer_type make_abstraction make_n_abstractions lookup_name
+          %% fun x ->
+          applications make_apply make_index make_parameter make_invention
+            infer_type make_abstraction make_n_abstractions lookup_name
+            (Some (make_apply f x))
 
-and application primitives =
+and application make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name =
   constant_parser "("
   %% fun _ ->
-  applications primitives None
+  applications make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name None
   %% fun a -> constant_parser ")" %% fun _ -> inject a
 
-and program_parser (primitives : (string, program) Hashtbl.t) : program parser =
-  application primitives
-  <|> primitive_parser primitives
-  <|> variable <|> invented primitives <|> abstraction primitives
+and program_parser make_apply make_index make_parameter make_invention
+    infer_type make_abstraction make_n_abstractions lookup_name =
+  application make_apply make_index make_parameter make_invention infer_type
+    make_abstraction make_n_abstractions lookup_name
+  <|> primitive_parser lookup_name
+  <|> variable make_index <|> parameter make_parameter
+  <|> invented make_apply make_index make_parameter make_invention infer_type
+        make_abstraction make_n_abstractions lookup_name
+  <|> abstraction make_apply make_index make_parameter make_invention infer_type
+        make_abstraction make_n_abstractions lookup_name
 
 let rec type_id_or_constructor_parser () =
   token
@@ -177,6 +238,60 @@ and arrow_parser () =
 and type_signature_parser () =
   type_id_or_constructor_parser () <|> arrow_parser ()
 
-let parse_program primitives = parse (program_parser primitives)
+let parse_program primitives s =
+  parse
+    (program_parser
+       (fun f x -> Apply (f, x))
+       (fun n -> Index (Int.of_string n))
+       (fun _ ->
+         failwith
+         @@ Format.sprintf
+              "parse_program: stitch parameter syntax found in program: %s" s )
+       (fun name ty body -> Invented {name; ty; body})
+       (fun body ->
+         try closed_inference body
+         with e ->
+           Printf.printf "Could not type check invented %s\n"
+             (string_of_program body) ;
+           raise e )
+       (fun b -> Abstraction b)
+       (fun n b -> wrap_abstractions (Int.of_string n) b)
+       (Hashtbl.find primitives) )
+    s
+
+let parse_stitch_invention primitives s =
+  Option.map ~f:program_of_stitch_invention_body
+  @@ parse
+       (program_parser
+          (fun f x -> SApply (f, x))
+          (fun n -> SIndex (Int.of_string n))
+          (fun n -> SParam (Int.of_string n))
+          (fun _ _ _ ->
+            failwith
+            @@ Format.sprintf
+                 "parse_stitch_invention: invention syntax detected: all \
+                  subroutines should be referred to by name: %s"
+                 s )
+          (fun _ ->
+            failwith
+            @@ Format.sprintf
+                 "parse_stitch_invention: invention syntax detected: all \
+                  subroutines should be referred to be name: %s"
+                 s )
+          (fun b -> SAbstraction b)
+          (fun n b -> wrap_stitch_abstractions (Int.of_string n) b)
+          (Fn.compose
+             (Option.map ~f:(function
+               | Primitive prim ->
+                   SPrimitive prim
+               | Invented inv ->
+                   SInvented inv
+               | p ->
+                   failwith
+                   @@ Format.sprintf
+                        "parse_program: not a base or invented primitive: %s"
+                        (string_of_program p) ) )
+             (Hashtbl.find primitives) ) )
+       s
 
 let parse_type_signature = parse (type_signature_parser ())
