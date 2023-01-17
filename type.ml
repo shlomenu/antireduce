@@ -360,37 +360,28 @@ and fast_type =
   | FArrow of fast_arrow_signature
   | FConstructor of fast_cons_signature
 
-let rec terminal_of_fast = function
-  | FArrow {right; _} ->
-      terminal_of_fast right
-  | ty ->
-      ty
+let rec aligned fast_ty ty =
+  match (fast_ty, ty) with
+  | FArrow {right= fast_right; _}, Arrow {right; _} ->
+      aligned fast_right right
+  | _, Id _ | FId _, _ | FConstructor _, Constructor _ ->
+      true
+  | FArrow _, Constructor _ | FConstructor _, Arrow _ ->
+      false
 
-let rec parameters_of_fast = function
-  | FArrow {left; right; _} ->
-      left :: parameters_of_fast right
-  | _ ->
-      []
+let rec align_rev ?(parameters = []) fast_ty ty =
+  if aligned fast_ty ty then Some (parameters, fast_ty)
+  else
+    match (fast_ty, ty) with
+    | FArrow {left= fast_left; right= fast_right; _}, Arrow {right; _} ->
+        align_rev ~parameters:(fast_left :: parameters) fast_right right
+    | _ ->
+        None
 
-let fast_is_polymorphic = function
-  | FArrow {polymorphic; _} | FConstructor {polymorphic; _} ->
-      Option.is_some polymorphic
-  | FId {contents= ty} ->
-      Option.value_map ty ~default:true ~f:is_polymorphic
-
-let rec list_of_fast_arrows = function
-  | FArrow {left; right; polymorphic} ->
-      (left, polymorphic) :: list_of_fast_arrows right
-  | ty ->
-      [(ty, None)]
-
-let rec fast_arrow_of_list = function
-  | [(last, None)] ->
-      last
-  | (left, polymorphic) :: right ->
-      FArrow {left; right= fast_arrow_of_list right; polymorphic}
-  | [] ->
-      failwith "arrows_of_list: cannot create type from empty list"
+let align fast_ty req =
+  align_rev fast_ty req
+  |> Option.map ~f:(fun (parameters_rev, suffix) ->
+         (List.rev parameters_rev, suffix) )
 
 let fast_of_slow ty =
   let ty = canonical_type ty in
@@ -470,20 +461,13 @@ let rec fast_unify cxt fast_ty ty =
 let make_fast_unifier ty =
   let fast_ty, types = fast_of_slow ty in
   fun cxt req ->
-    let l_req = list_of_arrows req in
-    let l_fast_ty = list_of_fast_arrows fast_ty in
-    let size_req = List.length l_req in
-    let size_fast_ty = List.length l_fast_ty in
-    if size_fast_ty < size_req then
+    let decomposition = align fast_ty req in
+    if Option.is_none decomposition then
       raise
         (UnificationFailure
            (Format.sprintf "%s does not unify with %s" (string_of_dc_type req)
               (string_of_dc_type ty) ) ) ;
-    let parameters_fast_ty, l_terminal_fast_ty =
-      List.split_n l_fast_ty (size_fast_ty - size_req)
-    in
-    let parameters_fast_ty = List.map parameters_fast_ty ~f:fst in
-    let terminal_fast_ty = fast_arrow_of_list l_terminal_fast_ty in
+    let parameters_fast_ty, terminal_fast_ty = Util.value_exn decomposition in
     let cxt = fast_unify cxt terminal_fast_ty req in
     let next_id = cxt.next_id in
     let next_id_ref = ref next_id in
