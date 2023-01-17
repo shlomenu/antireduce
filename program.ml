@@ -5,8 +5,8 @@ type primitive = {name: string; ty: dc_type}
 [@@deriving yojson, equal, compare, sexp_of, hash]
 
 type invention =
-  { name: string [@ignore.equal] [@ignore.compare]
-  ; ty: dc_type [@ignore.equal] [@ignore.compare]
+  { name: string [@equal.ignore] [@compare.ignore]
+  ; ty: dc_type [@equal.ignore] [@compare.ignore]
   ; body: program }
 [@@deriving yojson, equal, compare, sexp_of, hash]
 

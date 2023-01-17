@@ -329,13 +329,13 @@ let log_likelihood_of_factorization dsl fact =
   -. Hashtbl.fold fact.normalizers ~init:0. ~f:(fun ~key ~data tot ->
          tot +. (data *. (Util.logsumexp @@ List.map key ~f:ll_of)) )
 
+let rec list_of_applications = function
+  | Apply (f, x) ->
+      list_of_applications f @ [x]
+  | f ->
+      [f]
+
 let factorize dsl req p =
-  let rec walk_application_tree = function
-    | Apply (f, x) ->
-        walk_application_tree f @ [x]
-    | tree ->
-        [tree]
-  in
   let fact = empty_factorization () in
   let cxt_ref = ref empty_type_context in
   let rec go env p' ty =
@@ -343,9 +343,7 @@ let factorize dsl req p =
     | Abstraction b, Arrow {left; right; _} ->
         go (left :: env) b right
     | _ -> (
-      match walk_application_tree p' with
-      | [] ->
-          failwith "walk_application_tree"
+      match list_of_applications p' with
       | f :: xs -> (
           let unified = unifying_expressions dsl env ty !cxt_ref in
           match
@@ -362,7 +360,10 @@ let factorize dsl req p =
               cxt_ref := expr.context ;
               record_factor fact f
               @@ List.map unified ~f:(fun {expr; _} -> expr) ;
-              List.iter2_exn xs expr.parameters ~f:(go env) ) )
+              List.iter2_exn xs expr.parameters ~f:(go env) )
+      | [] ->
+          failwith
+            "factorize: impossible: list_of_applications returned empty list" )
   in
   go [] p req ; fact
 
