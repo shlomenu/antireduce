@@ -161,13 +161,6 @@ let rec make_app_n ?(c = 0) p n =
         failwith "make_app_n: n must be greater than zero"
   else Abstraction (make_app_n ~c:(c + 1) p n)
 
-let rec strip_n_abstractions (n : int) (p : program) : program =
-  match (n, p) with
-  | n, Abstraction b ->
-      strip_n_abstractions (n - 1) b
-  | _ ->
-      p
-
 let rec index_is_bound ?(i = 0) = function
   | Index j ->
       j = i

@@ -339,9 +339,9 @@ let factorize dsl req p =
   let fact = empty_factorization () in
   let cxt_ref = ref empty_type_context in
   let rec go env p' ty =
-    match ty with
-    | Arrow {left; right; _} ->
-        go (left :: env) (strip_n_abstractions 1 p') right
+    match (p', ty) with
+    | Abstraction b, Arrow {left; right; _} ->
+        go (left :: env) b right
     | _ -> (
       match walk_application_tree p' with
       | [] ->
@@ -353,7 +353,11 @@ let factorize dsl req p =
           with
           | None ->
               failwith
-                "primitive type did not unify during likelihood factorization"
+              @@ Format.sprintf
+                   "primitive type did not unify during likelihood \
+                    factorization:\n\
+                    %s\n"
+                   (string_of_program p)
           | Some expr ->
               cxt_ref := expr.context ;
               record_factor fact f
