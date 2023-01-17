@@ -163,12 +163,10 @@ let rec make_app_n ?(c = 0) p n =
 
 let rec strip_n_abstractions (n : int) (p : program) : program =
   match (n, p) with
-  | 0, p ->
-      p
   | n, Abstraction b ->
       strip_n_abstractions (n - 1) b
   | _ ->
-      failwith "strip_n_abstractions: fewer than n abstractions"
+      p
 
 let rec index_is_bound ?(i = 0) = function
   | Index j ->
