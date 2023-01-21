@@ -64,51 +64,6 @@ let update_progress_bar bar new_progress =
       Out_channel.flush stdout
     done
 
-module Yojson_util = struct
-  let yojson_of_hashtbl yojson_of_key yojson_of_data tbl =
-    `List
-      (Hashtbl.fold tbl ~init:[] ~f:(fun ~key ~data acc ->
-           `List [yojson_of_key key; yojson_of_data data] :: acc ) )
-
-  let hashtbl_of_yojson modl key_of_yojson data_of_yojson = function
-    | `List l ->
-        let tbl = Hashtbl.create modl in
-        List.iter l ~f:(function
-          | `List [yojson_key; yojson_data] ->
-              Hashtbl.add_exn tbl ~key:(key_of_yojson yojson_key)
-                ~data:(data_of_yojson yojson_data)
-          | _ ->
-              failwith "hashtbl_of_yojson: length-two list needed" ) ;
-        tbl
-    | _ ->
-        failwith "hashtbl_of_yojson: list needed"
-
-  let yojson_of_map yojson_of_key yojson_of_data map =
-    `List
-      (Map.fold map ~init:[] ~f:(fun ~key ~data acc ->
-           `List [yojson_of_key key; yojson_of_data data] :: acc ) )
-
-  let map_of_yojson modl key_of_yojson data_of_yojson = function
-    | `List l ->
-        List.fold l ~init:(Map.empty modl) ~f:(fun map -> function
-          | `List [yojson_key; yojson_data] ->
-              Map.add_exn map ~key:(key_of_yojson yojson_key)
-                ~data:(data_of_yojson yojson_data)
-          | _ ->
-              failwith "map_of_yojson: length-two list needed" )
-    | _ ->
-        failwith "map_of_yojson: list needed"
-
-  let sub name' value' = function
-    | `Assoc attrs ->
-        `Assoc
-          (List.map attrs ~f:(fun (name, value) ->
-               if String.(name = name') then (name, value') else (name, value) )
-          )
-    | _ ->
-        failwith "can only sub keys of JSON object"
-end
-
 exception Timeout
 
 let run_once_for_interval (time : float) (f : unit -> 'a) : 'a option =
@@ -151,46 +106,14 @@ let rec run_for_interval ?(attempts = 1) dt f =
         run_for_interval ~attempts:(attempts - 1) dt f
 
 module IntPair = struct
-  type t = int * int [@@deriving equal, compare, sexp_of, hash, yojson]
-end
+  module T = struct
+    type t = int * int [@@deriving equal, compare, sexp_of, hash, yojson]
+  end
 
-module OrdIntPair = struct
-  include IntPair
-  include Comparator.Make (IntPair)
+  include T
+  include Comparator.Make (T)
 end
 
 module FloatPair = struct
   type t = float * float [@@deriving compare]
-end
-
-module Array_list = struct
-  type 'a t = {mutable occupancy: int; mutable contents: 'a option Array.t}
-
-  let create () = {occupancy= 0; contents= Array.create ~len:10 None}
-
-  let push a x =
-    let l = Array.length a.contents in
-    if a.occupancy >= l then (
-      let n = Array.create ~len:(l * 2) None in
-      Array.blito ~src:a.contents ~dst:n () ;
-      a.contents <- n )
-    else () ;
-    Array.set a.contents a.occupancy (Some x) ;
-    a.occupancy <- a.occupancy + 1
-
-  let get a i =
-    assert (i < a.occupancy) ;
-    value_exn @@ Array.get a.contents i
-
-  let set a i v =
-    assert (i < a.occupancy) ;
-    Array.set a.contents i (Some v)
-
-  let rec ensure_length a l default =
-    if a.occupancy >= l then ()
-    else (push a default ; ensure_length a l default)
-
-  let clear a =
-    a.occupancy <- 0 ;
-    a.contents <- Array.create ~len:10 None
 end

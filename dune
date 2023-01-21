@@ -3,14 +3,34 @@
  (name antireduce)
  (libraries core core_unix containers)
  (modules
+  dsl_entry
+  dsl
+  factorization
+  dsl_unification
+  type
+  fast_type
+  type_context
+  type_unification
   compression
-  versions
+  version_space
+  version_table
+  version_and_cost_table
+  cost_table
+  beam_search
+  production
+  derivation
+  partial_derivation
+  pcfg
+  heap_search
   exploration
   frontier
-  dsl
   parser
   program
+  typed_program
+  arg_typed_program
   type
+  array_list
+  yojson_util
   util)
  (preprocess
   (pps ppx_jane ppx_compare ppx_yojson_conv))

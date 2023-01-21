@@ -1,5 +1,4 @@
 open Core
-open Program
 module S = Yojson.Safe
 module SU = Yojson.Safe.Util
 
@@ -13,7 +12,7 @@ let load_representations_from parse representations_dir frontier =
 let repr_path dir p =
   Filename.concat dir @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex
   @@ Md5.digest_string
-  @@ string_of_program ~format:`Dreamcoder p
+  @@ Program.to_string ~format:`Dreamcoder p
 
 let overwrite_representations programs' paths file_contents =
   List.zip_exn programs' file_contents
@@ -28,14 +27,15 @@ let overwrite_representations programs' paths file_contents =
   |> List.map ~f:(fun (path, program', file_content) ->
          ( path
          , repr_path (Filename.dirname path) program'
-         , Util.Yojson_util.sub "program"
-             (`String (string_of_program program'))
+         , Yojson_util.sub "program"
+             (yojson_of_string (Program.to_string program'))
              file_content
-           |> Util.Yojson_util.sub "size" (`Int (size_of_program program'))
-           |> Util.Yojson_util.sub "mass"
+           |> Yojson_util.sub "size" (yojson_of_int (Program.size program'))
+           |> Yojson_util.sub "mass"
                 (`Int
-                  ( mass_of_program
-                  @@ beta_normal_form ~reduce_invented:true program' ) ) ) )
+                  ( Program.mass
+                  @@ Program.beta_normal_form ~reduce_invented:true program' )
+                  ) ) )
   |> List.filter_map ~f:(fun (prev_path, cur_path, file_content') ->
          Caml.Sys.remove prev_path ;
          S.to_file cur_path file_content' ;

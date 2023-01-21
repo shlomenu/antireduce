@@ -1,27 +1,10 @@
 open Core
-open Program
-open Type
-module Array_list = Util.Array_list
 
-type version_space =
-  | Union of int list
-  | ApplySpace of int * int
-  | AbstractionSpace of int
-  | IndexSpace of int
-  | TerminalSpace of program
-  | Universe
-  | Void
-[@@deriving equal, compare, sexp_of, hash]
-
-module VersionSpace = struct
-  type t = version_space [@@deriving compare, sexp_of, hash]
-end
-
-type version_tbl =
+type t =
   { universe: int
   ; void: int
-  ; space2int: (version_space, int) Hashtbl.t
-  ; int2space: version_space Array_list.t
+  ; space2int: (Version_space.t, int) Hashtbl.t
+  ; int2space: Version_space.t Array_list.t
   ; inversions: int option Array_list.t
   ; n_step: (int * int, int) Hashtbl.t
   ; substitutions: (int * int, (int, int) Hashtbl.t) Hashtbl.t }
@@ -55,7 +38,7 @@ let rec string_of_version_tbl tbl i =
   | IndexSpace i ->
       Printf.sprintf "$%d" i
   | TerminalSpace p ->
-      string_of_program p
+      Program.to_string p
   | Union u ->
       let s =
         String.concat ~sep:"; " @@ List.map u ~f:(string_of_version_tbl tbl)
@@ -73,11 +56,11 @@ let incorporate_space tbl v =
       Array_list.push tbl.inversions None ;
       i
 
-let new_version_tbl () =
+let create () =
   let tbl =
     { void= 0
     ; universe= 1
-    ; space2int= Hashtbl.create (module VersionSpace)
+    ; space2int= Hashtbl.create (module Version_space)
     ; int2space= Array_list.create ()
     ; substitutions= Hashtbl.create (module Util.IntPair)
     ; n_step= Hashtbl.create (module Util.IntPair)
@@ -126,7 +109,7 @@ let union tbl spaces =
     | _ ->
         incorporate_space tbl (Union spaces)
 
-let rec incorporate tbl = function
+let rec incorporate tbl : Program.t -> int = function
   | Index i ->
       version_of_index tbl i
   | Abstraction b ->
@@ -145,7 +128,7 @@ let rec extract tbl i =
   | ApplySpace (f, x) ->
       extract tbl f
       |> List.concat_map ~f:(fun f' ->
-             extract tbl x |> List.map ~f:(fun x' -> Apply (f', x')) )
+             extract tbl x |> List.map ~f:(fun x' -> Program.Apply (f', x')) )
   | IndexSpace i ->
       [Index i]
   | Void ->
@@ -153,7 +136,7 @@ let rec extract tbl i =
   | TerminalSpace p ->
       [p]
   | AbstractionSpace b ->
-      extract tbl b |> List.map ~f:(fun b' -> Abstraction b')
+      extract tbl b |> List.map ~f:(fun b' -> Program.Abstraction b')
   | Universe ->
       [Primitive {ty= Id 0; name= "UNIVERSE"}]
 
@@ -262,7 +245,7 @@ let rec subtract tbl a b =
       tbl.void
   | IndexSpace _, _ ->
       a
-  | TerminalSpace t_a, TerminalSpace t_b when equal_program t_a t_b ->
+  | TerminalSpace t_a, TerminalSpace t_b when Program.equal t_a t_b ->
       tbl.void
   | TerminalSpace _, _ ->
       a
@@ -305,7 +288,7 @@ let rec intersection tbl a b =
       version_of_apply tbl (intersection tbl f_a f_b) (intersection tbl x_a x_b)
   | IndexSpace i_a, IndexSpace i_b when i_a = i_b ->
       a
-  | TerminalSpace p_a, TerminalSpace p_b when equal_program p_a p_b ->
+  | TerminalSpace p_a, TerminalSpace p_b when Program.equal p_a p_b ->
       a
   | _ ->
       tbl.void
@@ -318,7 +301,7 @@ let inline tbl =
     | ApplySpace (f, x) ->
         go (x :: args) f
     | TerminalSpace (Invented {body; _}) ->
-        let rec make_substitution env unused b =
+        let rec make_substitution env unused (b : Program.t) =
           match (unused, b) with
           | [], Abstraction _ ->
               None
@@ -329,7 +312,7 @@ let inline tbl =
           | _ ->
               Some (env, b)
         in
-        let rec apply_substitution ~k env = function
+        let rec apply_substitution ~k env : Program.t -> int = function
           | Index i when i < k ->
               version_of_index tbl i
           | Index i when i - k < List.length env ->
@@ -401,7 +384,7 @@ let rec intersecting ?(memo = None) tbl a b =
       | IndexSpace i_a, IndexSpace i_b ->
           i_a = i_b
       | TerminalSpace p_a, TerminalSpace p_b ->
-          equal_program p_a p_b
+          Program.equal p_a p_b
       | _ ->
           false
     in
@@ -492,7 +475,7 @@ let rec substitutions tbl ?(n = 0) i =
 
 let not_trivial_inversion tbl (v, b) =
   if
-    v = tbl.universe || equal_version_space (version_of_int tbl b) (IndexSpace 0)
+    v = tbl.universe || Version_space.equal (version_of_int tbl b) (IndexSpace 0)
   then None
   else Some (version_of_apply tbl (version_of_abstraction tbl b) v)
 
@@ -614,7 +597,7 @@ let reachable_versions tbl is =
   List.iter is ~f:go ; Hash_set.to_list visited
 
 let gc_versions ?(verbose = false) tbl is =
-  let tbl' = new_version_tbl () in
+  let tbl' = create () in
   let rec transfer i =
     match version_of_int tbl i with
     | Union u ->
@@ -640,298 +623,3 @@ let gc_versions ?(verbose = false) tbl is =
   (tbl', is)
 
 let epsilon_cost = 0.01
-
-type cost_and_version_tbl =
-  { function_cost: (float * int list) option Array_list.t
-  ; argument_cost: (float * int list) option Array_list.t
-  ; parent: version_tbl }
-
-let empty_cost_and_version_tbl tbl =
-  { function_cost= Array_list.create ()
-  ; argument_cost= Array_list.create ()
-  ; parent= tbl }
-
-(* The minimal inhabitant-related functions abbreviate
-    their search by skipping inhabitants containing applications
-    whose functions are abstractions, but which are not primitives.
-    This matches the form in which programs are synthesized, and which
-    is maintained during the application of inverse beta-reduction.
-    If this invariant is not maintained at an earlier point in the
-    process of program synthesis or translation into version spaces,
-    these functions will not return a minimal inhabitant. *)
-let rec minimum_cost_inhabitants ?(given = None) ?(can_be_lambda = true)
-    cost_tbl i =
-  let cache =
-    if can_be_lambda then cost_tbl.argument_cost else cost_tbl.function_cost
-  in
-  Array_list.ensure_length cache (i + 1) None ;
-  match Array_list.get cache i with
-  | Some c_inds ->
-      c_inds
-  | None ->
-      let c, inds =
-        match given with
-        | Some invention when intersecting cost_tbl.parent invention i ->
-            (1., [invention])
-        | _ -> (
-          match version_of_int cost_tbl.parent i with
-          | Universe | Void ->
-              failwith "minimum_cost_inhabitants"
-          | IndexSpace _ | TerminalSpace _ ->
-              (1., [i])
-          | Union u ->
-              let children =
-                List.map u
-                  ~f:(minimum_cost_inhabitants ~given ~can_be_lambda cost_tbl)
-              in
-              let c =
-                List.reduce_exn ~f:Float.min @@ List.map children ~f:fst
-              in
-              if Util.is_invalid c then (c, [])
-              else
-                let children =
-                  List.concat_map ~f:snd
-                  @@ List.filter children ~f:(fun (cost, _) ->
-                         Float.(cost = c) )
-                in
-                (c, children)
-          | AbstractionSpace b when can_be_lambda ->
-              let c, children =
-                minimum_cost_inhabitants ~given ~can_be_lambda cost_tbl b
-              in
-              let c = c +. epsilon_cost in
-              let children =
-                List.map children ~f:(version_of_abstraction cost_tbl.parent)
-              in
-              (c, children)
-          | AbstractionSpace _ ->
-              (Float.infinity, [])
-          | ApplySpace (f, x) ->
-              let c_f, children_f =
-                minimum_cost_inhabitants ~given ~can_be_lambda:false cost_tbl f
-              in
-              let c_x, children_x =
-                minimum_cost_inhabitants ~given ~can_be_lambda:true cost_tbl x
-              in
-              if Util.is_invalid c_f || Util.is_invalid c_x then
-                (Float.infinity, [])
-              else
-                ( c_f +. c_x +. epsilon_cost
-                , List.concat_map children_f ~f:(fun f' ->
-                      List.map children_x ~f:(fun x' ->
-                          version_of_apply cost_tbl.parent f' x' ) ) ) )
-      in
-      let c_inds = (c, List.dedup_and_sort inds ~compare:( - )) in
-      Array_list.set cache i (Some c_inds) ;
-      c_inds
-
-type cost_tbl =
-  { function_cost: float option Array_list.t
-  ; argument_cost: float option Array_list.t
-  ; parent: version_tbl }
-
-let empty_cost_tbl tbl =
-  { function_cost= Array_list.create ()
-  ; argument_cost= Array_list.create ()
-  ; parent= tbl }
-
-let rec minimal_inhabitant_cost ?(memo = None) ?(given = None)
-    ?(can_be_lambda = true) cost_tbl i =
-  let cache =
-    if can_be_lambda then cost_tbl.argument_cost else cost_tbl.function_cost
-  in
-  Array_list.ensure_length cache (i + 1) None ;
-  match Array_list.get cache i with
-  | Some c_inds ->
-      c_inds
-  | None ->
-      let c =
-        match given with
-        | Some invention when intersecting ~memo cost_tbl.parent invention i ->
-            1.
-        | _ -> (
-          match version_of_int cost_tbl.parent i with
-          | Universe | Void ->
-              failwith "minimal_inhabitant_cost"
-          | IndexSpace _ | TerminalSpace _ ->
-              1.
-          | Union u ->
-              List.reduce_exn ~f:Float.min
-              @@ List.map u
-                   ~f:
-                     (minimal_inhabitant_cost ~memo ~given ~can_be_lambda
-                        cost_tbl )
-          | AbstractionSpace b when can_be_lambda ->
-              epsilon_cost
-              +. minimal_inhabitant_cost ~memo ~given ~can_be_lambda cost_tbl b
-          | AbstractionSpace _ ->
-              Float.infinity
-          | ApplySpace (f, x) ->
-              epsilon_cost
-              +. minimal_inhabitant_cost ~memo ~given ~can_be_lambda:false
-                   cost_tbl f
-              +. minimal_inhabitant_cost ~memo ~given ~can_be_lambda:true
-                   cost_tbl x )
-      in
-      Array_list.set cache i (Some c) ;
-      c
-
-let rec minimal_inhabitant ?(memo = None) ?(given = None)
-    ?(can_be_lambda = true) cost_tbl i =
-  let c = minimal_inhabitant_cost ~memo ~given ~can_be_lambda cost_tbl i in
-  if Util.is_invalid c then None
-  else
-    let p =
-      match (c, given) with
-      | 1., Some invention when intersecting ~memo cost_tbl.parent invention i
-        ->
-          extract_program cost_tbl.parent invention
-      | _ -> (
-        match version_of_int cost_tbl.parent i with
-        | Universe | Void ->
-            failwith "minimal_inhabitant"
-        | IndexSpace _ | TerminalSpace _ ->
-            extract_program cost_tbl.parent i
-        | Union u ->
-            Util.value_exn
-            @@ minimal_inhabitant ~memo ~given ~can_be_lambda cost_tbl
-            @@ Util.minimum u ~compare:Float.compare
-                 ~key:
-                   (minimal_inhabitant_cost ~memo ~given ~can_be_lambda cost_tbl)
-        | AbstractionSpace b ->
-            Abstraction
-              ( Util.value_exn
-              @@ minimal_inhabitant ~memo ~given ~can_be_lambda:true cost_tbl b
-              )
-        | ApplySpace (f, x) ->
-            Apply
-              ( Util.value_exn
-                @@ minimal_inhabitant ~memo ~given ~can_be_lambda:false cost_tbl
-                     f
-              , Util.value_exn
-                @@ minimal_inhabitant ~memo ~given ~can_be_lambda:true cost_tbl
-                     x ) )
-    in
-    Some p
-
-type beam =
-  { unrefactored_func_cost: float
-  ; unrefactored_arg_cost: float
-  ; mutable refactored_func_cost: (int, float) Hashtbl.t
-  ; mutable refactored_arg_cost: (int, float) Hashtbl.t }
-
-let limit_beam ~beam_size b =
-  let limit beam =
-    if Hashtbl.length beam > beam_size then
-      Hashtbl.to_alist beam
-      |> List.sort ~compare:(fun (_, c_1) (_, c_2) -> Float.compare c_1 c_2)
-      |> (Fn.flip List.take) beam_size
-      |> Hashtbl.of_alist_exn (module Int)
-    else beam
-  in
-  b.refactored_func_cost <- limit b.refactored_func_cost ;
-  b.refactored_arg_cost <- limit b.refactored_arg_cost
-
-let relax tbl ~key ~data =
-  Hashtbl.change tbl key
-    ~f:
-      (Option.value_map ~default:(Some data) ~f:(fun v ->
-           if Float.(v > data) then Some data else None ) )
-
-let func_cost b i =
-  Hashtbl.find b.refactored_func_cost i
-  |> Option.value_map ~f:Fn.id ~default:b.unrefactored_func_cost
-
-let arg_cost b i =
-  Hashtbl.find b.refactored_arg_cost i
-  |> Option.value_map ~f:Fn.id ~default:b.unrefactored_arg_cost
-
-let inventions_costs tbl inventions =
-  let costs = Hashtbl.create (module Int) in
-  List.iter inventions ~f:(fun invention ->
-      let cost =
-        Float.of_int @@ List.length
-        @@ List.dedup_and_sort ~compare:( - )
-        @@ free_variables
-        @@ extract_program tbl invention
-      in
-      Hashtbl.set costs ~key:invention ~data:(1. +. cost) ) ;
-  costs
-
-let beams ~(cost_and_version_tbl : cost_and_version_tbl) ~beam_size inventions
-    frontier =
-  let costs = inventions_costs cost_and_version_tbl.parent inventions in
-  let inventions = Hash_set.Poly.of_list inventions in
-  let cache = Array_list.create () in
-  let rec go i =
-    Array_list.ensure_length cache (i + 1) None ;
-    match Array_list.get cache i with
-    | Some beam ->
-        beam
-    | None ->
-        let unrefactored_arg_cost, inhabitants =
-          minimum_cost_inhabitants ~can_be_lambda:true cost_and_version_tbl i
-        in
-        let unrefactored_func_cost, _ =
-          minimum_cost_inhabitants ~can_be_lambda:false cost_and_version_tbl i
-        in
-        let beam =
-          { unrefactored_arg_cost
-          ; unrefactored_func_cost
-          ; refactored_func_cost= Hashtbl.create (module Int)
-          ; refactored_arg_cost= Hashtbl.create (module Int) }
-        in
-        List.filter inhabitants ~f:(Hash_set.mem inventions)
-        |> List.iter ~f:(fun invention ->
-               let cost = Hashtbl.find_exn costs invention in
-               Hashtbl.set beam.refactored_func_cost ~key:invention ~data:cost ;
-               Hashtbl.set beam.refactored_arg_cost ~key:invention ~data:cost ) ;
-        ( match version_of_int cost_and_version_tbl.parent i with
-        | AbstractionSpace b ->
-            let child = go b in
-            Hashtbl.iteri child.refactored_arg_cost ~f:(fun ~key ~data ->
-                relax beam.refactored_arg_cost ~key ~data:(data +. epsilon_cost) )
-        | ApplySpace (f, x) ->
-            let beam_f = go f in
-            let beam_x = go x in
-            let refactored_with =
-              Hashtbl.keys beam_f.refactored_func_cost
-              @ Hashtbl.keys beam_x.refactored_arg_cost
-            in
-            List.iter refactored_with ~f:(fun invention ->
-                let c =
-                  epsilon_cost +. func_cost beam_f invention
-                  +. arg_cost beam_x invention
-                in
-                relax beam.refactored_func_cost ~key:invention ~data:c ;
-                relax beam.refactored_arg_cost ~key:invention ~data:c )
-        | Union u ->
-            List.iter u ~f:(fun v ->
-                let child = go v in
-                Hashtbl.iteri child.refactored_func_cost ~f:(fun ~key ~data ->
-                    relax beam.refactored_func_cost ~key ~data ) ;
-                Hashtbl.iteri child.refactored_arg_cost ~f:(fun ~key ~data ->
-                    relax beam.refactored_arg_cost ~key ~data ) )
-        | IndexSpace _ | Universe | Void | TerminalSpace _ ->
-            () ) ;
-        limit_beam ~beam_size beam ;
-        Array_list.set cache i (Some beam) ;
-        beam
-  in
-  List.iter frontier ~f:(fun i -> ignore (go i : beam)) ;
-  cache
-
-let beam_costs ~cost_and_version_tbl ~beam_size inventions frontier =
-  let cache = beams ~cost_and_version_tbl ~beam_size inventions frontier in
-  let beams =
-    List.map frontier ~f:(fun i -> Util.value_exn @@ Array_list.get cache i)
-  in
-  List.map inventions ~f:(fun invention ->
-      List.reduce_exn ~f:( +. )
-      @@ List.map beams ~f:(fun beam ->
-             Float.min (arg_cost beam invention) (func_cost beam invention) ) )
-
-let beams_and_costs ~cost_and_version_tbl ~beam_size ~inventions frontier =
-  let costs = beam_costs ~cost_and_version_tbl ~beam_size inventions frontier in
-  List.zip_exn costs inventions
-  |> List.sort ~compare:(fun (s_1, _) (s_2, _) -> Float.compare s_1 s_2)

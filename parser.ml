@@ -1,14 +1,12 @@
 open Core
-open Type
-open Program
 
 type stitch_program =
   | SIndex of int
   | SParam of int
   | SAbstraction of stitch_program
   | SApply of stitch_program * stitch_program
-  | SPrimitive of primitive
-  | SInvented of invention
+  | SPrimitive of Program.primitive
+  | SInvented of Program.invention
 
 let rec arity_of_stitch_program = function
   | SIndex _ ->
@@ -31,7 +29,7 @@ let program_of_stitch_invention_body stitch_inv =
       0
     |> List.mapi ~f:(fun k v -> (v, k))
   in
-  let rec go d = function
+  let rec go d : stitch_program -> Program.t = function
     | SIndex j ->
         Index j
     | SAbstraction b ->
@@ -45,7 +43,8 @@ let program_of_stitch_invention_body stitch_inv =
     | SParam j ->
         Index (d + List.Assoc.find_exn ~equal m j)
   in
-  List.fold_right m ~init:(go 0 stitch_inv) ~f:(fun _ e -> Abstraction e)
+  List.fold_right m ~init:(go 0 stitch_inv) ~f:(fun _ (e : Program.t) ->
+      Abstraction e )
 
 let rec wrap_stitch_abstractions n e =
   if n > 0 then wrap_stitch_abstractions (n - 1) (SAbstraction e) else e
@@ -201,16 +200,17 @@ let rec type_id_or_constructor_parser () =
   ( match
       parse
         ( constant_parser "t"
-        %% fun _ -> number %% fun n -> inject @@ Id (Int.of_string n) )
+        %% fun _ -> number %% fun n -> inject @@ Type.Id (Int.of_string n) )
         name
     with
   | Some type_id ->
       inject type_id
   | None ->
-      inject @@ kind name [] )
+      inject @@ Type.kind name [] )
   <|> constant_parser "("
       %% fun _ ->
-      parameters_parser () %% fun parameters -> inject @@ kind name parameters
+      parameters_parser ()
+      %% fun parameters -> inject @@ Type.kind name parameters
 
 and parameters_parser () =
   type_id_or_constructor_parser ()
@@ -233,7 +233,7 @@ and arrow_parser () =
   %% fun _ ->
   whitespace
   %% fun _ ->
-  type_signature_parser () %% fun right -> inject @@ arrow left right
+  type_signature_parser () %% fun right -> inject @@ Type.arrow left right
 
 and type_signature_parser () =
   type_id_or_constructor_parser () <|> arrow_parser ()
@@ -241,21 +241,21 @@ and type_signature_parser () =
 let parse_program primitives s =
   parse
     (program_parser
-       (fun f x -> Apply (f, x))
-       (fun n -> Index (Int.of_string n))
+       (fun f x -> Program.Apply (f, x))
+       (fun n -> Program.Index (Int.of_string n))
        (fun _ ->
          failwith
          @@ Format.sprintf
               "parse_program: stitch parameter syntax found in program: %s" s )
        (fun name ty body -> Invented {name; ty; body})
        (fun body ->
-         try closed_inference body
+         try Program.closed_inference body
          with e ->
            Printf.printf "Could not type check invented %s\n"
-             (string_of_program body) ;
+             (Program.to_string body) ;
            raise e )
        (fun b -> Abstraction b)
-       (fun n b -> wrap_abstractions (Int.of_string n) b)
+       (fun n b -> Program.wrap_abstractions (Int.of_string n) b)
        (Hashtbl.find primitives) )
     s
 
@@ -282,15 +282,15 @@ let parse_stitch_invention primitives s =
           (fun n b -> wrap_stitch_abstractions (Int.of_string n) b)
           (Fn.compose
              (Option.map ~f:(function
-               | Primitive prim ->
+               | Program.Primitive prim ->
                    SPrimitive prim
-               | Invented inv ->
+               | Program.Invented inv ->
                    SInvented inv
                | p ->
                    failwith
                    @@ Format.sprintf
                         "parse_program: not a base or invented primitive: %s"
-                        (string_of_program p) ) )
+                        (Program.to_string p) ) )
              (Hashtbl.find primitives) ) )
        s
 
