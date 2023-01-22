@@ -11,8 +11,7 @@ let load_representations_from parse representations_dir frontier =
 
 let repr_path dir p =
   Filename.concat dir @@ Fn.flip ( ^ ) ".json" @@ Md5.to_hex
-  @@ Md5.digest_string
-  @@ Program.to_string ~format:`Dreamcoder p
+  @@ Md5.digest_string @@ Program.to_string p
 
 let overwrite_representations programs' paths file_contents =
   List.zip_exn programs' file_contents
@@ -30,6 +29,8 @@ let overwrite_representations programs' paths file_contents =
          , Yojson_util.sub "program"
              (yojson_of_string (Program.to_string program'))
              file_content
+           |> Yojson_util.sub "stitch_program"
+                (yojson_of_string (Program.to_string ~format:`Stitch program'))
            |> Yojson_util.sub "size" (yojson_of_int (Program.size program'))
            |> Yojson_util.sub "mass"
                 (`Int
