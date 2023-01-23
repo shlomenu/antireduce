@@ -1,5 +1,7 @@
 open Core
 
+exception Unparseable of string
+
 type stitch_program =
   | SIndex of int
   | SParam of int
@@ -259,6 +261,13 @@ let parse_program primitives s =
        (Hashtbl.find primitives) )
     s
 
+let parse_program_exn primitives s =
+  match parse_program primitives s with
+  | Some p ->
+      p
+  | None ->
+      raise (Unparseable s)
+
 let parse_stitch_invention primitives s =
   Option.map ~f:program_of_stitch_invention_body
   @@ parse
@@ -293,5 +302,12 @@ let parse_stitch_invention primitives s =
                         (Program.to_string p) ) )
              (Hashtbl.find primitives) ) )
        s
+
+let parse_stitch_invention_exn primitives s =
+  match parse_stitch_invention primitives s with
+  | Some inv ->
+      inv
+  | None ->
+      raise (Unparseable s)
 
 let parse_type_signature = parse (type_signature_parser ())
