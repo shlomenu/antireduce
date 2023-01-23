@@ -54,10 +54,24 @@ let log_likelihood_of_entry dsl p =
     with
     | [ent] ->
         ent.log_likelihood
-    | _ :: _ ->
-        failwith
-          ( Format.sprintf "log_likelihood_under_dsl: duplicate_primitive %s"
-          @@ Program.to_string p )
+    | _ :: _ as matches -> (
+        let name = Program.name_of_primitive p in
+        match
+          List.filter_map matches ~f:(fun ent ->
+              if String.(ent.stitch_name = name) then Some ent else None )
+        with
+        | [ent] ->
+            ent.log_likelihood
+        | _ :: _ as exact_matches ->
+            failwith
+              ( Format.sprintf
+                  "log_likelihood_under_dsl: duplicate_primitives %s"
+              @@ List.to_string ~f:Program.to_string
+                   (p :: List.map exact_matches ~f:Dsl_entry.to_primitive) )
+        | _ ->
+            failwith
+              ( Format.sprintf "log_likelihood_under_dsl: missing_primitive %s"
+              @@ Program.to_string p ) )
     | [] ->
         failwith
           ( Format.sprintf "log_likelihood_under_dsl: missing_primitive %s"
