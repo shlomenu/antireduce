@@ -97,7 +97,9 @@ let of_type ty =
                 in
                 Array.iter types ~f:(fun ty_opt -> ty_opt := None) ;
                 (cxt'', parameters) :: unifications
-              with Type_unification.UnificationFailure _ -> unifications )
+              with Type_unification.UnificationFailure _ ->
+                Array.iter types ~f:(fun ty_opt -> ty_opt := None) ;
+                unifications )
         in
         if List.is_empty unifications then
           raise (Type_unification.UnificationFailure fail_msg)
