@@ -60,7 +60,7 @@ let primitives dsl req cxt =
   Dsl.library dsl
   |> List.concat_map ~f:(fun ent ->
          try
-           ent.unifier cxt req
+           ent.unification.unify cxt req
            |> List.map ~f:(fun (context, parameters) ->
                   { expr= Dsl_entry.to_primitive ent
                   ; parameters

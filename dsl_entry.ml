@@ -6,7 +6,7 @@ type t =
   ; ty: Type.t
   ; impl: Program.t option
   ; log_likelihood: float
-  ; unifier: Type_context.t -> Type.t -> (Type_context.t * Type.t list) list }
+  ; unification: Fast_type_unification.t }
 [@@deriving fields]
 
 let yojson_of_t ent =
@@ -29,7 +29,7 @@ let t_of_yojson = function
       ; stitch_name= string_of_yojson j_stitch_name
       ; ty
       ; impl= option_of_yojson Program.t_of_yojson j_impl
-      ; unifier= Fast_type.unifier ty
+      ; unification= Fast_type_unification.of_type ty
       ; log_likelihood= float_of_yojson j_ll }
   | _ ->
       failwith "primitive_entry_of_yojson: invalid json"
@@ -47,14 +47,14 @@ let of_primitive log_likelihood : Program.t -> t = function
       ; stitch_name= name
       ; ty
       ; impl= None
-      ; unifier= Fast_type.unifier ty
+      ; unification= Fast_type_unification.of_type ty
       ; log_likelihood }
   | Invented {name; ty; body} ->
       { dc_name= Program.to_string body
       ; stitch_name= name
       ; ty
       ; impl= Some body
-      ; unifier= Fast_type.unifier ty
+      ; unification= Fast_type_unification.of_type ty
       ; log_likelihood }
   | _ ->
       failwith "dsl_of_primitives: not a base primitive"
