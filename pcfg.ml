@@ -15,9 +15,9 @@ type t =
   ; max_prob: Derivation.t Map.M(Type).t }
 [@@deriving fields]
 
-let expand_rules rules dsl req =
-  Partial_derivation.find ~completed_nts:(Map.key_set rules) dsl
-    Type_context.empty req
+let expand_rules ?(type_size_limit = 20) rules dsl req =
+  Partial_derivation.find ~type_size_limit ~completed_nts:(Map.key_set rules)
+    dsl Type_context.empty req
   |> List.concat_map
        ~f:
          (Fn.compose Partial_derivation.to_productions Partial_derivation.unify)
@@ -40,9 +40,10 @@ let prod_lists_of_sets =
              (Production.log_likelihood prod_2) )
       @@ Set.to_list prods )
 
-let rec rules_of_dsl ?(rules = Map.empty (module Type)) dsl req =
-  let rules', added = expand_rules rules dsl req in
-  if added then rules_of_dsl ~rules:rules' dsl req
+let rec rules_of_dsl ?(type_size_limit = 20) ?(rules = Map.empty (module Type))
+    dsl req =
+  let rules', added = expand_rules ~type_size_limit rules dsl req in
+  if added then rules_of_dsl ~type_size_limit ~rules:rules' dsl req
   else prod_lists_of_sets rules'
 
 let max_prob_parameterless rules =
@@ -101,6 +102,6 @@ let rec max_prob_rest rules max_prob =
 let max_prob_of_rules rules =
   max_prob_rest rules @@ max_prob_parameterless rules
 
-let of_dsl start dsl =
-  let rules = rules_of_dsl dsl start in
+let of_dsl ?(type_size_limit = 20) start dsl =
+  let rules = rules_of_dsl ~type_size_limit dsl start in
   {start; rules; max_prob= max_prob_of_rules rules}
