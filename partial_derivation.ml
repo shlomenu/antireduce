@@ -41,7 +41,7 @@ let rec to_productions = function
   | Seen _ ->
       []
 
-let rec find ?(type_size_limit = 100) ?(seen_nts = Set.empty (module Type))
+let rec find ?(type_size_limit = 20) ?(seen_nts = Set.empty (module Type))
     ?(completed_nts = Set.empty (module Type)) dsl cxt req =
   if (not (Set.is_empty seen_nts)) && Set.mem completed_nts req then
     [(Seen req, cxt)]
