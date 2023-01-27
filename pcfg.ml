@@ -16,20 +16,21 @@ type t =
 [@@deriving fields]
 
 let expand_rules rules dsl req =
-  List.fold ~init:(rules, false) ~f:(fun (rules', added') (nt, prod) ->
-      match Map.find rules' nt with
-      | Some nt_prods ->
-          let nt_prods' = Set.add nt_prods prod in
-          let added'' = Set.length nt_prods' > Set.length nt_prods in
-          (Map.set rules' ~key:nt ~data:nt_prods', added' || added'')
-      | None ->
-          ( Map.set rules' ~key:nt ~data:(Set.singleton (module Production) prod)
-          , true ) )
-  @@ List.concat_map
+  Partial_derivation.find ~completed_nts:(Map.key_set rules) dsl
+    Type_context.empty req
+  |> List.concat_map
        ~f:
          (Fn.compose Partial_derivation.to_productions Partial_derivation.unify)
-  @@ Partial_derivation.find ~completed_nts:(Map.key_set rules) dsl
-       Type_context.empty req
+  |> List.fold ~init:(rules, false) ~f:(fun (rules', added') (nt, prod) ->
+         match Map.find rules' nt with
+         | Some nt_prods ->
+             let nt_prods' = Set.add nt_prods prod in
+             let added'' = Set.length nt_prods' > Set.length nt_prods in
+             (Map.set rules' ~key:nt ~data:nt_prods', added' || added'')
+         | None ->
+             ( Map.set rules' ~key:nt
+                 ~data:(Set.singleton (module Production) prod)
+             , true ) )
 
 let prod_lists_of_sets =
   Map.map ~f:(fun prods ->

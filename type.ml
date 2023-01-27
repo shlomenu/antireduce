@@ -26,6 +26,15 @@ end
 include T
 include Comparator.Make (T)
 
+let rec size = function
+  | Id _ ->
+      1
+  | Constructor {parameters; _} ->
+      1
+      + List.fold parameters ~init:0 ~f:(fun size' param -> size' + size param)
+  | Arrow {left; right; _} ->
+      size left + size right
+
 let is_polymorphic = function
   | Id _ ->
       true
