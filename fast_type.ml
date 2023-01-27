@@ -6,6 +6,23 @@ and arr = {left: t; right: t; polymorphic: Type.t option}
 
 and t = FId of Type.t option ref | FArrow of arr | FConstructor of cons
 
+let to_string : t -> string =
+  let rec go parenthesized = function
+    | FId i ->
+        Option.value_map !i ~default:"t?" ~f:Type.to_string
+    | FArrow {left; right; _} ->
+        let body = go true left ^ " -> " ^ go false right in
+        if parenthesized then "(" ^ body ^ ")" else body
+    | FConstructor {name; parameters; _} ->
+        if List.is_empty parameters then name
+        else
+          let params =
+            List.map parameters ~f:(go false) |> String.concat ~sep:", "
+          in
+          name ^ "(" ^ params ^ ")"
+  in
+  go false
+
 let rec aligned fast_ty (ty : Type.t) =
   match (fast_ty, ty) with
   | FArrow {right= fast_right; _}, Arrow {right; _} ->
