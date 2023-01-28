@@ -41,22 +41,17 @@ let rec to_productions = function
   | Seen _ ->
       []
 
-let rec find ?(type_size_limit = 100) ?(seen_nts = []) ?(completed_nts = []) dsl
-    cxt req =
-  if
-    (not (List.is_empty seen_nts))
-    && List.mem completed_nts req ~equal:Type.equal
-  then [(Seen req, cxt)]
-  else if
-    Type.size req > type_size_limit
-    || List.mem seen_nts req ~equal:(fun req' nt ->
-           try
-             ignore (Type_unification.unify cxt req' nt : Type_context.t) ;
-             true
-           with Type_unification.UnificationFailure _ -> false )
+let rec find ?(type_size_limit = 100)
+    ?(seen_nts = Set.empty (module Structural_type))
+    ?(completed_nts = Set.empty (module Structural_type)) dsl cxt req =
+  if (not (Set.is_empty seen_nts)) && Set.mem completed_nts (Some cxt, req) then
+    [(Seen req, cxt)]
+  else if Type.size req > type_size_limit || Set.mem seen_nts (Some cxt, req)
   then []
   else
-    let seen_nts' = req :: seen_nts in
+    let seen_nts' =
+      Set.add seen_nts @@ Structural_type.of_contextual_type cxt req
+    in
     Dsl_unification.expressions dsl [] req cxt
     |> List.sort ~compare:(fun u_1 u_2 ->
            Int.compare (List.length u_1.parameters) (List.length u_2.parameters) )

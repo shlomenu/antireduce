@@ -12,6 +12,7 @@
   fast_type_unification
   type_context
   type_unification
+  structural_type
   compression
   version_space
   version_table

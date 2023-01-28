@@ -16,8 +16,12 @@ type t =
 [@@deriving fields]
 
 let expand_rules ?(type_size_limit = 100) rules dsl req =
-  Partial_derivation.find ~type_size_limit ~completed_nts:(Map.keys rules) dsl
-    Type_context.empty req
+  Partial_derivation.find ~type_size_limit
+    ~completed_nts:
+      ( Set.of_list (module Structural_type)
+      @@ List.map ~f:Structural_type.of_type
+      @@ Map.keys rules )
+    dsl Type_context.empty req
   |> List.concat_map
        ~f:
          (Fn.compose Partial_derivation.to_productions Partial_derivation.unify)
