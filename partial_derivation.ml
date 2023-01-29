@@ -41,12 +41,27 @@ let rec to_productions = function
   | Seen _ ->
       []
 
+module Transition = struct
+  module T = struct
+    type t = Program.t * int * Program.t [@@deriving equal, compare, sexp_of]
+  end
+
+  include T
+  include Comparator.Make (T)
+end
+
 let rec find ?(type_size_limit = 100)
+    ?(transitions = Set.empty (module Transition))
     ?(seen_nts = Set.empty (module Structural_type))
-    ?(completed_nts = Set.empty (module Structural_type)) dsl cxt req =
+    ?(completed_nts = Set.empty (module Structural_type))
+    ?(trans : Transition.t option = None) dsl cxt req =
   if (not (Set.is_empty seen_nts)) && Set.mem completed_nts (Some cxt, req) then
     [(Seen req, cxt)]
-  else if Type.size req > type_size_limit || Set.mem seen_nts (Some cxt, req)
+  else if
+    Type.size req > type_size_limit
+    || Set.mem seen_nts (Some cxt, req)
+    || Option.value_map trans ~default:false ~f:(fun trans ->
+           Set.mem transitions trans )
   then []
   else
     let seen_nts' =
@@ -56,15 +71,29 @@ let rec find ?(type_size_limit = 100)
     |> List.sort ~compare:(fun u_1 u_2 ->
            Int.compare (List.length u_1.parameters) (List.length u_2.parameters) )
     |> List.concat_map ~f:(fun unified ->
+           let transitions' =
+             Option.value_map trans ~default:transitions
+               ~f:(Set.add transitions)
+           in
+           let trans' i =
+             match trans with
+             | Some (_, _, parent) ->
+                 Some (parent, i, unified.expr)
+             | None ->
+                 Some (Primitive {name= "UNK"; ty= req}, i, unified.expr)
+           in
            List.fold unified.parameters
-             ~init:[([], unified.context)]
+             ~init:[([], unified.context, 0)]
              ~f:(fun params_derivs param ->
-               List.concat_map params_derivs ~f:(fun (params_deriv, cxt') ->
+               List.concat_map params_derivs
+                 ~f:(fun (params_deriv, cxt', position) ->
                    let cxt'', param' = Type_context.apply cxt' param in
-                   find ~seen_nts:seen_nts' ~completed_nts dsl cxt'' param'
+                   find ~transitions:transitions' ~seen_nts:seen_nts'
+                     ~completed_nts ~trans:(trans' position) dsl cxt'' param'
                    |> List.map ~f:(fun (param_deriv, cxt''') ->
-                          (param_deriv :: params_deriv, cxt''') ) ) )
-           |> List.map ~f:(fun (params_deriv_rev, cxt') ->
+                          (param_deriv :: params_deriv, cxt''', position + 1) ) )
+               )
+           |> List.map ~f:(fun (params_deriv_rev, cxt', _) ->
                   ( Unseen
                       (Fields_of_unseen.create ~terminal:unified.expr
                          ~nonterminals:(List.rev params_deriv_rev)
