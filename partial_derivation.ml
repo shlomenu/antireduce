@@ -52,11 +52,19 @@ end
 
 let rec find ?(type_size_limit = 100)
     ?(transitions = Set.empty (module Transition))
-    ?(seen_nts = Set.empty (module Structural_type))
-    ?(completed_nts = Set.empty (module Structural_type))
+    ?(seen_nts = Set.empty (module Structural_type)) ?(completed_nts = [])
     ?(trans : Transition.t option = None) dsl cxt req =
-  if (not (Set.is_empty seen_nts)) && Set.mem completed_nts (Some cxt, req) then
-    [(Seen req, cxt)]
+  let completed =
+    if Set.is_empty seen_nts then []
+    else
+      List.filter_map completed_nts ~f:(fun ty ->
+          try
+            let cxt' = Type_unification.unify cxt req ty in
+            let cxt'', req' = Type_context.apply cxt' req in
+            Some (Seen req', cxt'')
+          with Type_unification.UnificationFailure _ -> None )
+  in
+  if not (List.is_empty completed) then completed
   else if
     Type.size req > type_size_limit
     || Set.mem seen_nts (Some cxt, req)
