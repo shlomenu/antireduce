@@ -69,11 +69,14 @@ let primitives dsl req cxt =
          with Type_unification.UnificationFailure _ -> [] )
 
 let expressions dsl env req cxt =
-  let unified = indices dsl env req cxt @ primitives dsl req cxt in
-  if List.is_empty unified then unified
+  indices dsl env req cxt @ primitives dsl req cxt
+
+let normalized_expressions dsl env req cxt =
+  let unnormed = expressions dsl env req cxt in
+  if List.is_empty unnormed then unnormed
   else
     let z =
-      Util.logsumexp @@ List.map unified ~f:(fun ent -> ent.log_likelihood)
+      Util.logsumexp @@ List.map unnormed ~f:(fun ent -> ent.log_likelihood)
     in
-    List.map unified ~f:(fun ent ->
+    List.map unnormed ~f:(fun ent ->
         {ent with log_likelihood= ent.log_likelihood -. z} )
