@@ -77,6 +77,14 @@ let log_likelihood_of_entry dsl p =
           ( Format.sprintf "log_likelihood_under_dsl: missing_primitive %s"
           @@ Program.to_string p )
 
+let rec log_likelihood_of_program dsl : Program.t -> float = function
+  | Abstraction b ->
+      log_likelihood_of_program dsl b
+  | Apply (f, x) ->
+      log_likelihood_of_program dsl f +. log_likelihood_of_program dsl x
+  | p ->
+      log_likelihood_of_entry dsl p
+
 let rescale ~max_diff dsl =
   let lls = List.map dsl.library ~f:(fun ent -> ent.log_likelihood) in
   let n_lls, sum_lls, min_ll, max_ll =
