@@ -76,3 +76,31 @@ let log_likelihood_of_entry dsl p =
         failwith
           ( Format.sprintf "log_likelihood_under_dsl: missing_primitive %s"
           @@ Program.to_string p )
+
+let rescale ~max_diff dsl =
+  let lls = List.map dsl.library ~f:(fun ent -> ent.log_likelihood) in
+  let n_lls, sum_lls, min_ll, max_ll =
+    List.fold lls ~init:(0, 0., Float.infinity, Float.neg_infinity)
+      ~f:(fun (n, tot, mn, mx) ll ->
+        (n + 1, tot +. ll, Float.min mn ll, Float.max mx ll) )
+  in
+  let mean_ll = sum_lls /. Float.of_int n_lls in
+  let unscaled_max_diff = max_ll -. min_ll in
+  let unscaled_max_pos_diff, unscaled_max_neg_diff =
+    (min_ll -. mean_ll, max_ll -. mean_ll)
+  in
+  let max_pos_diff, max_neg_diff =
+    ( unscaled_max_pos_diff /. unscaled_max_diff *. max_diff
+    , unscaled_max_neg_diff /. unscaled_max_diff *. max_diff )
+  in
+  { dsl with
+    library=
+      List.map lls ~f:(fun ll ->
+          let unscaled_diff = ll -. mean_ll in
+          mean_ll
+          +.
+          if Float.(unscaled_diff >= 0.) then
+            unscaled_diff /. unscaled_max_pos_diff *. max_pos_diff
+          else unscaled_diff /. unscaled_max_neg_diff *. max_neg_diff )
+      |> List.zip_exn dsl.library
+      |> List.map ~f:(fun (ent, log_likelihood) -> {ent with log_likelihood}) }
