@@ -94,21 +94,24 @@ let rescale ~max_diff dsl =
   in
   let mean_ll = sum_lls /. Float.of_int n_lls in
   let unscaled_max_diff = max_ll -. min_ll in
-  let unscaled_max_pos_diff, unscaled_max_neg_diff =
-    (min_ll -. mean_ll, max_ll -. mean_ll)
-  in
-  let max_pos_diff, max_neg_diff =
-    ( unscaled_max_pos_diff /. unscaled_max_diff *. max_diff
-    , unscaled_max_neg_diff /. unscaled_max_diff *. max_diff )
-  in
-  { dsl with
-    library=
-      List.map lls ~f:(fun ll ->
-          let unscaled_diff = ll -. mean_ll in
-          mean_ll
-          +.
-          if Float.(unscaled_diff >= 0.) then
-            unscaled_diff /. unscaled_max_pos_diff *. max_pos_diff
-          else unscaled_diff /. unscaled_max_neg_diff *. max_neg_diff )
-      |> List.zip_exn dsl.library
-      |> List.map ~f:(fun (ent, log_likelihood) -> {ent with log_likelihood}) }
+  if Float.(unscaled_max_diff <= max_diff) then dsl
+  else
+    let unscaled_max_pos_diff, unscaled_max_neg_diff =
+      (min_ll -. mean_ll, max_ll -. mean_ll)
+    in
+    let max_pos_diff, max_neg_diff =
+      ( unscaled_max_pos_diff /. unscaled_max_diff *. max_diff
+      , unscaled_max_neg_diff /. unscaled_max_diff *. max_diff )
+    in
+    { dsl with
+      library=
+        List.map lls ~f:(fun ll ->
+            let unscaled_diff = ll -. mean_ll in
+            mean_ll
+            +.
+            if Float.(unscaled_diff >= 0.) then
+              unscaled_diff /. unscaled_max_pos_diff *. max_pos_diff
+            else unscaled_diff /. unscaled_max_neg_diff *. max_neg_diff )
+        |> List.zip_exn dsl.library
+        |> List.map ~f:(fun (ent, log_likelihood) -> {ent with log_likelihood})
+    }
