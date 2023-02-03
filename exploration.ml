@@ -237,8 +237,8 @@ let enumerate_until_timeout ~timeout ~size_limit ~process_program deriv cache =
   let count, finish_ll, cache' = go deriv start_program cache in
   (count, start_ll, finish_ll, cache')
 
-let unikey_explore ~exploration_timeout ~program_size_limit ~initial_program
-    ~eval_timeout ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
+let unikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
+    ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
     ~retrieve_result ~nontrivial ~parse ~request ~yojson_of_output
     ~primary_key_of_output ~yojson_of_primary_key ~primary_key_of_yojson
     primary_key_modl =
@@ -255,18 +255,9 @@ let unikey_explore ~exploration_timeout ~program_size_limit ~initial_program
       ~parse primary_key_modl
   in
   let initial_deriv =
-    Derivation.Fields.create ~terminal:initial_program ~nonterminals:[]
-      ~nonterminal:request
-      ~log_likelihood:
-        ( match initial_program with
-        | Program.Primitive _ | Invented _ ->
-            Dsl.log_likelihood_of_entry dsl initial_program
-        | p ->
-            failwith
-            @@ Format.sprintf
-                 "unikey_explore: initial program must be a primitive \
-                  requiring no arguments: %s"
-            @@ Program.to_string p )
+    Derivation.Fields.create
+      ~terminal:(Primitive {name= "UNK"; ty= request})
+      ~nonterminals:[] ~nonterminal:request ~log_likelihood:0.
   in
   let n_enumerated, _, max_ll, _ =
     enumerate_until_timeout ~timeout:exploration_timeout
@@ -284,8 +275,8 @@ let unikey_explore ~exploration_timeout ~program_size_limit ~initial_program
   in
   (n_new, n_replaced, replacements, n_enumerated, max_ll)
 
-let multikey_explore ~exploration_timeout ~program_size_limit ~initial_program
-    ~eval_timeout ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
+let multikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
+    ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
     ~retrieve_result ~nontrivial ~parse ~request ~yojson_of_output
     ~keys_of_output ~yojson_of_primary_key ~primary_key_of_yojson
     ~yojson_of_secondary_key ~secondary_key_of_yojson ~equal_secondary_key
@@ -303,18 +294,9 @@ let multikey_explore ~exploration_timeout ~program_size_limit ~initial_program
       ~secondary_key_of_yojson ~parse primary_key_modl
   in
   let initial_deriv =
-    Derivation.Fields.create ~terminal:initial_program ~nonterminals:[]
-      ~nonterminal:request
-      ~log_likelihood:
-        ( match initial_program with
-        | Program.Primitive _ | Invented _ ->
-            Dsl.log_likelihood_of_entry dsl initial_program
-        | p ->
-            failwith
-            @@ Format.sprintf
-                 "unikey_explore: initial program must be a primitive \
-                  requiring no arguments: %s"
-            @@ Program.to_string p )
+    Derivation.Fields.create
+      ~terminal:(Primitive {name= "UNK"; ty= request})
+      ~nonterminals:[] ~nonterminal:request ~log_likelihood:0.
   in
   let n_enumerated, _, max_ll, _ =
     enumerate_until_timeout ~timeout:exploration_timeout
