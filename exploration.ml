@@ -46,9 +46,11 @@ let unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
   |> evaluate ~timeout:eval_timeout ~attempts p_applied
   |> Option.map ~f:retrieve_result
   |> Option.bind ~f:(fun o -> if nontrivial o then Some o else None)
-  |> Option.value_map ~default:() ~f:(fun o ->
+  |> Option.value_map ~default:false ~f:(fun o ->
+         let added = ref false in
          Hashtbl.update representations (primary_key_of_output o) ~f:(function
            | None ->
+               added := true ;
                (Some p, None, yojson_of_output o)
            | Some (None, None, _) ->
                failwith "unikey_store_if_hit: vacuous entry"
@@ -62,7 +64,8 @@ let unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
                  if Program.mass p < Program.mass cur_p then Some p
                  else cur_best
                in
-               (cur_best, prev_best, o) ) )
+               (cur_best, prev_best, o) ) ;
+         !added )
 
 let multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
     ~retrieve_result ~nontrivial ~keys_of_output ~yojson_of_output
@@ -72,10 +75,12 @@ let multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
   |> evaluate ~timeout:eval_timeout ~attempts p_applied
   |> Option.map ~f:retrieve_result
   |> Option.bind ~f:(fun o -> if nontrivial o then Some o else None)
-  |> Option.value_map ~default:() ~f:(fun o ->
+  |> Option.value_map ~default:false ~f:(fun o ->
          let primary_key, secondary_key = keys_of_output o in
+         let added = ref false in
          Hashtbl.update representations primary_key ~f:(function
            | None ->
+               added := true ;
                [(Some p, None, secondary_key, yojson_of_output o)]
            | Some [] ->
                failwith "multikey_store_if_hit: unpopulated table entry"
@@ -119,10 +124,12 @@ let multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
                          else (found, hit :: hits') )
              with
              | false, hits' ->
+                 added := true ;
                  (Some p, None, secondary_key, yojson_of_output o)
                  :: List.rev hits'
              | true, hits' ->
-                 List.rev hits' ) ) )
+                 List.rev hits' ) ) ;
+         !added )
 
 let unikey_replacements ~representations_dir ~yojson_of_primary_key =
   Hashtbl.fold ~init:(0, 0, [])
@@ -208,11 +215,12 @@ let multikey_replacements ~representations_dir ~yojson_of_primary_key
                 ; ("secondary_key", yojson_of_secondary_key secondary_key) ] ;
            (n_new', n_replaced', replacements') )
 
-let enumerate_until_timeout ~timeout ~size_limit ~process_program deriv cache =
+let enumerate_until_timeout ~timeout ~max_new ~size_limit ~process_program deriv
+    cache =
   let start_ll = Derivation.log_likelihood deriv in
   let start_program = Derivation.to_program deriv in
   let end_time = Core_unix.time () +. timeout in
-  let rec go ?(count = 0) deriv_cur p_cur cache' =
+  let rec go ?(count = 0) ?(max_new = max_new) deriv_cur p_cur cache' =
     if Float.(Core_unix.time () < end_time) then (
       let deriv_next, cache'' = Heap_search.query deriv_cur cache' in
       let p_next = Derivation.to_program deriv_next in
@@ -228,17 +236,21 @@ let enumerate_until_timeout ~timeout ~size_limit ~process_program deriv cache =
               )"
              (Program.to_string p_next) (Program.to_string p_cur) ;
       if Program.size p_next > size_limit then
-        go ~count deriv_next p_next cache''
-      else (
-        process_program p_next ;
-        go ~count:(count + 1) deriv_next p_next cache'' ) )
+        go ~count ~max_new deriv_next p_next cache''
+      else
+        let max_new' =
+          if max_new > 0 then
+            if process_program p_next then max_new - 1 else max_new
+          else max_new
+        in
+        go ~count:(count + 1) ~max_new:max_new' deriv_next p_next cache'' )
     else (count, deriv_cur.log_likelihood, cache')
   in
   let count, finish_ll, cache' = go deriv start_program cache in
   (count, start_ll, finish_ll, cache')
 
-let unikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
-    ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
+let unikey_explore ~exploration_timeout ~max_programs ~program_size_limit
+    ~eval_timeout ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
     ~retrieve_result ~nontrivial ~parse ~request ~yojson_of_output
     ~primary_key_of_output ~yojson_of_primary_key ~primary_key_of_yojson
     primary_key_modl =
@@ -260,7 +272,7 @@ let unikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
       ~nonterminals:[] ~nonterminal:request ~log_likelihood:0.
   in
   let n_enumerated, _, max_ll, _ =
-    enumerate_until_timeout ~timeout:exploration_timeout
+    enumerate_until_timeout ~timeout:exploration_timeout ~max_new:max_programs
       ~size_limit:program_size_limit
       ~process_program:
         (unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout
@@ -275,8 +287,8 @@ let unikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
   in
   (n_new, n_replaced, replacements, n_enumerated, max_ll)
 
-let multikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
-    ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
+let multikey_explore ~exploration_timeout ~max_programs ~program_size_limit
+    ~eval_timeout ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
     ~retrieve_result ~nontrivial ~parse ~request ~yojson_of_output
     ~keys_of_output ~yojson_of_primary_key ~primary_key_of_yojson
     ~yojson_of_secondary_key ~secondary_key_of_yojson ~equal_secondary_key
@@ -299,7 +311,7 @@ let multikey_explore ~exploration_timeout ~program_size_limit ~eval_timeout
       ~nonterminals:[] ~nonterminal:request ~log_likelihood:0.
   in
   let n_enumerated, _, max_ll, _ =
-    enumerate_until_timeout ~timeout:exploration_timeout
+    enumerate_until_timeout ~timeout:exploration_timeout ~max_new:max_programs
       ~size_limit:program_size_limit
       ~process_program:
         (multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout
