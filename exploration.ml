@@ -40,7 +40,7 @@ let multikey_representations_tbl ~representations_dir ~primary_key_of_yojson
 
 let unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
     ~retrieve_result ~nontrivial ~primary_key_of_output ~yojson_of_output
-    representations p =
+    ~add_new representations p =
   let p_applied = apply_to_state p in
   Arg_typed_program.of_program (Dsl.state_type dsl) p_applied
   |> evaluate ~timeout:eval_timeout ~attempts p_applied
@@ -48,28 +48,30 @@ let unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
   |> Option.bind ~f:(fun o -> if nontrivial o then Some o else None)
   |> Option.value_map ~default:false ~f:(fun o ->
          let added = ref false in
-         Hashtbl.update representations (primary_key_of_output o) ~f:(function
+         Hashtbl.change representations (primary_key_of_output o) ~f:(function
            | None ->
-               added := true ;
-               (Some p, None, yojson_of_output o)
+               if add_new then (
+                 added := true ;
+                 Some (Some p, None, yojson_of_output o) )
+               else None
            | Some (None, None, _) ->
                failwith "unikey_store_if_hit: vacuous entry"
            | Some (None, (Some prev_p as prev_best), o) ->
                let cur_best =
                  if Program.mass p < Program.mass prev_p then Some p else None
                in
-               (cur_best, prev_best, o)
+               Some (cur_best, prev_best, o)
            | Some ((Some cur_p as cur_best), prev_best, o) ->
                let cur_best =
                  if Program.mass p < Program.mass cur_p then Some p
                  else cur_best
                in
-               (cur_best, prev_best, o) ) ;
+               Some (cur_best, prev_best, o) ) ;
          !added )
 
 let multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
     ~retrieve_result ~nontrivial ~keys_of_output ~yojson_of_output
-    ~equal_secondary_key representations p =
+    ~equal_secondary_key ~add_new representations p =
   let p_applied = apply_to_state p in
   Arg_typed_program.of_program (Dsl.state_type dsl) p_applied
   |> evaluate ~timeout:eval_timeout ~attempts p_applied
@@ -78,10 +80,12 @@ let multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
   |> Option.value_map ~default:false ~f:(fun o ->
          let primary_key, secondary_key = keys_of_output o in
          let added = ref false in
-         Hashtbl.update representations primary_key ~f:(function
+         Hashtbl.change representations primary_key ~f:(function
            | None ->
-               added := true ;
-               [(Some p, None, secondary_key, yojson_of_output o)]
+               if add_new then (
+                 added := true ;
+                 Some [(Some p, None, secondary_key, yojson_of_output o)] )
+               else None
            | Some [] ->
                failwith "multikey_store_if_hit: unpopulated table entry"
            | Some hits -> (
@@ -123,12 +127,13 @@ let multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
                            )
                          else (found, hit :: hits') )
              with
-             | false, hits' ->
+             | false, hits' when add_new ->
                  added := true ;
-                 (Some p, None, secondary_key, yojson_of_output o)
-                 :: List.rev hits'
-             | true, hits' ->
-                 List.rev hits' ) ) ;
+                 Some
+                   ( (Some p, None, secondary_key, yojson_of_output o)
+                   :: List.rev hits' )
+             | _, hits' ->
+                 Some (List.rev hits') ) ) ;
          !added )
 
 let unikey_replacements ~representations_dir ~yojson_of_primary_key =
@@ -238,12 +243,11 @@ let enumerate_until_timeout ~timeout ~max_new ~size_limit ~process_program deriv
       if Program.size p_next > size_limit then
         go ~count ~max_new deriv_next p_next cache''
       else
-        let max_new' =
-          if max_new > 0 then
-            if process_program p_next then max_new - 1 else max_new
-          else max_new
-        in
-        go ~count:(count + 1) ~max_new:max_new' deriv_next p_next cache'' )
+        go ~count:(count + 1)
+          ~max_new:
+            ( if process_program ~add_new:(max_new > 0) p_next then max_new - 1
+            else max_new )
+          deriv_next p_next cache'' )
     else (count, deriv_cur.log_likelihood, cache')
   in
   let count, finish_ll, cache' = go deriv start_program cache in
