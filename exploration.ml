@@ -253,11 +253,11 @@ let enumerate_until_timeout ~timeout ~max_new ~size_limit ~process_program deriv
   let count, finish_ll, cache' = go deriv start_program cache in
   (count, start_ll, finish_ll, cache')
 
-let unikey_explore ~exploration_timeout ~max_programs ~program_size_limit
-    ~eval_timeout ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
-    ~retrieve_result ~nontrivial ~parse ~request ~yojson_of_output
-    ~primary_key_of_output ~yojson_of_primary_key ~primary_key_of_yojson
-    primary_key_modl =
+let unikey_explore ~exploration_timeout ~max_novel_representations
+    ~program_size_limit ~eval_timeout ~attempts ~dsl ~representations_dir
+    ~apply_to_state ~evaluate ~retrieve_result ~nontrivial ~parse ~request
+    ~yojson_of_output ~primary_key_of_output ~yojson_of_primary_key
+    ~primary_key_of_yojson primary_key_modl =
   if
     not
       ( Type.equal request
@@ -276,8 +276,8 @@ let unikey_explore ~exploration_timeout ~max_programs ~program_size_limit
       ~nonterminals:[] ~nonterminal:request ~log_likelihood:0.
   in
   let n_enumerated, _, max_ll, _ =
-    enumerate_until_timeout ~timeout:exploration_timeout ~max_new:max_programs
-      ~size_limit:program_size_limit
+    enumerate_until_timeout ~timeout:exploration_timeout
+      ~max_new:max_novel_representations ~size_limit:program_size_limit
       ~process_program:
         (unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout
            ~attempts ~retrieve_result ~nontrivial ~primary_key_of_output
@@ -291,12 +291,12 @@ let unikey_explore ~exploration_timeout ~max_programs ~program_size_limit
   in
   (n_new, n_replaced, replacements, n_enumerated, max_ll)
 
-let multikey_explore ~exploration_timeout ~max_programs ~program_size_limit
-    ~eval_timeout ~attempts ~dsl ~representations_dir ~apply_to_state ~evaluate
-    ~retrieve_result ~nontrivial ~parse ~request ~yojson_of_output
-    ~keys_of_output ~yojson_of_primary_key ~primary_key_of_yojson
-    ~yojson_of_secondary_key ~secondary_key_of_yojson ~equal_secondary_key
-    primary_key_modl =
+let multikey_explore ~exploration_timeout ~max_novel_representations
+    ~program_size_limit ~eval_timeout ~attempts ~dsl ~representations_dir
+    ~apply_to_state ~evaluate ~retrieve_result ~nontrivial ~parse ~request
+    ~yojson_of_output ~keys_of_output ~yojson_of_primary_key
+    ~primary_key_of_yojson ~yojson_of_secondary_key ~secondary_key_of_yojson
+    ~equal_secondary_key primary_key_modl =
   if
     not
       ( Type.equal request
@@ -315,8 +315,8 @@ let multikey_explore ~exploration_timeout ~max_programs ~program_size_limit
       ~nonterminals:[] ~nonterminal:request ~log_likelihood:0.
   in
   let n_enumerated, _, max_ll, _ =
-    enumerate_until_timeout ~timeout:exploration_timeout ~max_new:max_programs
-      ~size_limit:program_size_limit
+    enumerate_until_timeout ~timeout:exploration_timeout
+      ~max_new:max_novel_representations ~size_limit:program_size_limit
       ~process_program:
         (multikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout
            ~attempts ~retrieve_result ~nontrivial ~keys_of_output
