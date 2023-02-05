@@ -74,14 +74,13 @@ let rec query deriv_cur cache =
                  } )
              ~f:(fun ((pre, post), cache') leaf ->
                let leaf_next, cache'' = query leaf cache' in
-               let pre' = leaf_next :: pre in
-               ( (pre', List.drop post 1)
+               ( (leaf :: pre, List.drop post 1)
                , let deriv_next' =
                    { deriv_next with
-                     nonterminals= List.rev_append pre' post
+                     nonterminals= List.rev_append (leaf_next :: pre) post
                    ; log_likelihood=
-                       deriv_next.log_likelihood
-                       +. (leaf_next.log_likelihood -. leaf.log_likelihood) }
+                       deriv_next.log_likelihood -. leaf.log_likelihood
+                       +. leaf_next.log_likelihood }
                  in
                  let nt_seen = Map.find_exn cache''.seen nt in
                  if not (Set.mem nt_seen deriv_next') then
