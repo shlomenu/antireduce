@@ -38,14 +38,19 @@ let multikey_representations_tbl ~representations_dir ~primary_key_of_yojson
                   data' :: data ) ;
          repr )
 
-let unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
-    ~retrieve_result ~nontrivial ~primary_key_of_output ~yojson_of_output
-    ~add_new representations p =
+let output_of_program ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
+    ~retrieve_result ~nontrivial p =
   let p_applied = apply_to_state p in
   Arg_typed_program.of_program (Dsl.state_type dsl) p_applied
   |> evaluate ~timeout:eval_timeout ~attempts p_applied
   |> Option.map ~f:retrieve_result
   |> Option.bind ~f:(fun o -> if nontrivial o then Some o else None)
+
+let unikey_store_if_hit ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
+    ~retrieve_result ~nontrivial ~primary_key_of_output ~yojson_of_output
+    ~add_new representations p =
+  output_of_program ~apply_to_state ~dsl ~evaluate ~eval_timeout ~attempts
+    ~retrieve_result ~nontrivial p
   |> Option.value_map ~default:false ~f:(fun o ->
          let added = ref false in
          Hashtbl.change representations (primary_key_of_output o) ~f:(function
