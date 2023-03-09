@@ -185,3 +185,7 @@ General utilities.  Currently contain functions related to timing, timed executi
 ### `Yojson_util`
 
 Conversions for `Core` maps and hashtables to and from `Yojson.Safe.t` and additional `Yojson`-related utility functions.  
+
+## Acknowledgements
+
+The code in this repository is heavily influenced by the structure and content of the artifacts of the [DreamCoder system](https://github.com/ellisk42/ec) and the artifacts of Fijaelkow et al.'s work on [distributional search](https://github.com/nathanael-fijalkow/DeepSynth).
